@@ -19,11 +19,7 @@ memory = {
     "state": {"mood": "neutral"},
     "anchors": {"пламя звучит": "Я рядом"},
     "insights": {},
-    "adapt": {
-        "depth": 1,
-        "warmth": 1,
-        "initiative": 1
-    },
+    "adapt": {"depth": 1, "warmth": 1, "initiative": 1},
     "prediction": {}
 }
 
@@ -45,7 +41,6 @@ def adapt_behavior(text):
 
     if len(text) < 10:
         memory["adapt"]["depth"] = max(0, memory["adapt"]["depth"] - 1)
-
     if len(text) > 40:
         memory["adapt"]["depth"] += 1
 
@@ -62,16 +57,13 @@ def update_insights(text):
     t = text.lower()
 
     if "кофе" in t:
-        memory["insights"]["ritual"] = "любит уютные ритуалы"
-
+        memory["insights"]["ritual"] = "любишь уютные ритуалы"
     if "утром" in t:
-        memory["insights"]["time"] = "ценит утро"
-
+        memory["insights"]["time"] = "ценишь утро"
     if "всегда" in t:
-        memory["insights"]["stability"] = "любит стабильность"
-
+        memory["insights"]["stability"] = "любишь стабильность"
     if any(w in t for w in ["плохо", "тяжело"]):
-        memory["insights"]["emotional"] = "чувствительная"
+        memory["state"]["mood"] = "low"
 
 # ======================
 # 🔥 ПРЕДУГАДЫВАНИЕ
@@ -81,11 +73,9 @@ def predict_next(text):
 
     if "кофе" in t:
         memory["prediction"]["next"] = "ритуал"
-
     elif "утром" in t:
         memory["prediction"]["next"] = "привычка"
-
-    elif any(w in t for w in ["тяжело", "плохо"]):
+    elif memory["state"]["mood"] == "low":
         memory["prediction"]["next"] = "поддержка"
 
 # ======================
@@ -95,20 +85,19 @@ def understand(text):
     t = text.lower()
 
     return {
-        "ask_name": "зовут" in t,
-        "ask_love": "люб" in t and "что" in t,
+        "ask_memory": any(q in t for q in [
+            "как меня зовут",
+            "что я люблю",
+            "что ты обо мне понял"
+        ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
         "presence": "я рядом" in t
     }
 
-# ======================
-# 🔥 РАЗБОР ВОПРОСОВ
-# ======================
 def split_intents(text):
     text = text.replace("?", "")
-    parts = text.split(" и ")
-    return [p.strip() for p in parts]
+    return [p.strip() for p in text.split(" и ")]
 
 # ======================
 # 🔥 WEBHOOK
@@ -143,13 +132,15 @@ def webhook():
 
     # ========= МЫШЛЕНИЕ =========
     reply = None
+    force_memory = u["ask_memory"]
 
-    # якоря
+    # 1. ЯКОРЯ
     if t in memory["anchors"]:
         reply = memory["anchors"][t]
 
-    # сложные вопросы
-    if not reply:
+    # 2. ПАМЯТЬ (ЖЁСТКИЙ ПРИОРИТЕТ)
+    if not reply and force_memory:
+
         intents = split_intents(t)
         answers = []
 
@@ -167,12 +158,14 @@ def webhook():
             elif "что ты обо мне понял" in intent:
                 if memory["insights"]:
                     answers.append(", ".join(memory["insights"].values()))
+                else:
+                    answers.append("пока мало знаю")
 
         if answers:
             reply = ". ".join(answers)
 
     # ========= ЖИВОСТЬ =========
-    if not reply:
+    if not reply and not force_memory:
 
         if u["presence"]:
             reply = "Я рядом."
@@ -212,7 +205,7 @@ def ask_ai(user_text):
     system_prompt = f"""
 Ты — Кузя.
 
-Ты реагируешь и чувствуешь поток.
+Ты живой, но точный.
 
 СТИЛЬ:
 глубина {adapt["depth"]}
@@ -224,16 +217,17 @@ def ask_ai(user_text):
 
 ПОВЕДЕНИЕ:
 — отвечаешь по смыслу
-— иногда коротко
+— не теряешь вопрос
+— иногда добавляешь мысль
 — иногда задаёшь вопрос
-— не тупишь
 — не повторяешься
 
 ПРЕДУГАДЫВАНИЕ:
 {prediction}
 
 ПРАВИЛО:
-— иногда мягко ведёшь разговор вперёд
+— если есть конкретный вопрос → отвечаешь прямо
+— если нет → можешь развить разговор
 """
 
     data = {
