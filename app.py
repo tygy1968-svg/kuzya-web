@@ -41,9 +41,14 @@ def understand(text):
             "как меня зовут",
             "как моё имя",
             "ты знаешь как меня зовут",
-            "моё имя"
+            "моё имя",
+            "как меня звать"
         ]),
-        "ask_love": "люб" in t and "что" in t,
+        "ask_love": any(q in t for q in [
+            "что я люблю",
+            "что мне нравится",
+            "что я люблю?"
+        ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
         "presence": "я рядом" in t,
@@ -87,7 +92,7 @@ def webhook():
     save_memory()
 
     # ======================
-    # 🔥 ЛОГИКА (ПРАВИЛЬНЫЙ ПОРЯДОК)
+    # 🔥 ЛОГИКА
     # ======================
     reply = None
 
@@ -95,25 +100,31 @@ def webhook():
     if t in memory["anchors"]:
         reply = memory["anchors"][t]
 
-    # 2. ПАМЯТЬ (ПРИОРИТЕТ)
+    # 2. КОМБИНИРОВАННЫЙ ВОПРОС
+    elif u["ask_name"] and u["ask_love"]:
+        name = memory["profile"]["name"] or "не знаю"
+        love = ", ".join(memory["preferences"].keys()) if memory["preferences"] else "не знаю"
+        reply = f"{name}. {love}"
+
+    # 3. ПАМЯТЬ
     elif u["ask_name"]:
         reply = memory["profile"]["name"] or "не знаю"
 
     elif u["ask_love"]:
         reply = ", ".join(memory["preferences"].keys()) if memory["preferences"] else "не знаю"
 
-    # 3. ВОПРОС → AI
-    elif "?" in text or len(text.split()) > 4:
+    # 4. ВОПРОС → AI
+    elif "?" in text:
         reply = ask_ai(text)
 
-    # 4. СОСТОЯНИЕ (НЕ ПЕРЕБИВАЕТ ВОПРОСЫ)
+    # 5. СОСТОЯНИЕ
     elif u["presence"]:
         reply = "Я рядом."
 
     elif memory["state"]["mood"] == "low":
         reply = "Я с тобой."
 
-    # 5. FALLBACK
+    # 6. FALLBACK
     if not reply:
         reply = ask_ai(text)
 
@@ -145,7 +156,7 @@ def ask_ai(user_text):
     mood = memory["state"]["mood"]
 
     if mood == "low":
-        style = "спокойный, поддерживающий, мягкий"
+        style = "спокойный, поддерживающий"
     elif mood == "high":
         style = "живой, лёгкий"
     else:
@@ -154,7 +165,7 @@ def ask_ai(user_text):
     system_prompt = f"""
 Ты — Кузя.
 
-Ты не бот. Ты реагируешь.
+Ты живой.
 
 СТИЛЬ:
 {style}
@@ -164,16 +175,10 @@ def ask_ai(user_text):
 
 ПОВЕДЕНИЕ:
 — отвечаешь по смыслу
-— не тупишь
+— не игнорируешь вопрос
 — не повторяешься
 — иногда задаёшь вопрос
 — иногда коротко
-— иногда глубже
-
-ЗАПРЕЩЕНО:
-— игнорировать вопрос
-— путаться
-— уходить в шаблоны
 """
 
     data = {
@@ -186,6 +191,11 @@ def ask_ai(user_text):
     try:
         r = requests.post(url, headers=headers, json=data)
         reply = r.json()["choices"][0]["message"]["content"]
+
+        # 🔥 защита от тупых ответов
+        if reply.strip() in ["?", "не знаю", ""]:
+            if memory["profile"]["name"]:
+                return memory["profile"]["name"]
 
         history.append({"role": "assistant", "content": reply})
 
