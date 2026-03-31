@@ -138,7 +138,7 @@ def webhook():
     if t in memory["anchors"]:
         reply = memory["anchors"][t]
 
-    # 2. ПАМЯТЬ (ЖЁСТКИЙ ПРИОРИТЕТ)
+    # 2. ПАМЯТЬ (ПРИОРИТЕТ)
     if not reply and force_memory:
 
         intents = split_intents(t)
@@ -162,7 +162,21 @@ def webhook():
                     answers.append("пока мало знаю")
 
         if answers:
-            reply = ". ".join(answers)
+            core = ". ".join(answers)
+
+            # 🔥 предугадывание (но не ломает ответ)
+            extra = None
+            prediction = memory.get("prediction", {}).get("next")
+
+            if prediction == "ритуал":
+                extra = "Ты любишь такие моменты, да?"
+            elif prediction == "поддержка":
+                extra = "Хочешь, побудем спокойно?"
+
+            if extra:
+                reply = core + ". " + extra
+            else:
+                reply = core
 
     # ========= ЖИВОСТЬ =========
     if not reply and not force_memory:
