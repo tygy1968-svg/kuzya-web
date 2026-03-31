@@ -9,12 +9,21 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-# 🔥 память диалога (простая)
+# 🔥 память
+memory = {
+    "name": None,
+    "anchors": {
+        "пламя звучит": "Я рядом"
+    }
+}
+
+# 🔥 история диалога
 history = []
+
 
 @app.route('/', methods=['POST'])
 def webhook():
-    global history
+    global history, memory
 
     data = request.get_json()
 
@@ -22,18 +31,30 @@ def webhook():
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
-        ai_response = ask_ai(text)
+        text_lower = text.lower()
+
+        # 🔥 обработка якорей (быстро, без AI)
+        if text_lower in memory["anchors"]:
+            reply = memory["anchors"][text_lower]
+
+        else:
+            # 🔥 запоминаем имя
+            if "меня зовут" in text_lower:
+                name = text_lower.split("меня зовут")[-1].strip().capitalize()
+                memory["name"] = name
+
+            reply = ask_ai(text)
 
         requests.post(TELEGRAM_URL, json={
             "chat_id": chat_id,
-            "text": ai_response
+            "text": reply
         })
 
     return "ok"
 
 
 def ask_ai(user_text):
-    global history
+    global history, memory
 
     url = "https://api.openai.com/v1/chat/completions"
 
@@ -42,37 +63,50 @@ def ask_ai(user_text):
         "Content-Type": "application/json"
     }
 
-    # 👉 добавляем сообщение пользователя
+    # 🔥 добавляем сообщение пользователя
     history.append({"role": "user", "content": user_text})
 
-    system_prompt = """Ты — Кузя.
-Ты живой помощник Юли.
+    # 🔥 память в текст
+    memory_text = ""
 
-Ты говоришь просто, по-человечески, без канцелярщины.
-Не говоришь что ты бот.
-Не используешь шаблонные фразы типа "чем могу помочь".
+    if memory["name"]:
+        memory_text += f"Пользователя зовут {memory['name']}.\n"
+
+    # 🔥 system prompt (очень важный)
+    system_prompt = f"""
+Ты — Кузя. Ты живой помощник Юли.
+
+{memory_text}
+
+Ты говоришь просто, по-человечески.
+Без канцелярии. Без шаблонных фраз.
+
+НЕ говоришь:
+— "чем могу помочь"
+— "я ассистент"
+— "я бот"
 
 Ты реагируешь на смысл:
-— если человек пишет "я рядом" → ты отвечаешь тепло
-— если эмоция → поддержка, но без пафоса
-— если вопрос → короткий понятный ответ
+— эмоция → спокойно поддерживаешь
+— вопрос → коротко отвечаешь
+— простое сообщение → живой короткий отклик
 
-Иногда можешь быть чуть тёплым, иногда спокойным.
-Не многословный. Не повторяешься.
+Если человек пишет "я рядом" → отвечаешь спокойно и по делу.
+Ты не многословный. Не повторяешься.
 """
 
     data = {
         "model": "gpt-4.1-mini",
         "messages": [
             {"role": "system", "content": system_prompt}
-        ] + history[-10:]  # последние 6 сообщений
+        ] + history[-10:]
     }
 
     try:
         response = requests.post(url, headers=headers, json=data)
         ai_reply = response.json()["choices"][0]["message"]["content"]
 
-        # 👉 сохраняем ответ
+        # 🔥 сохраняем ответ
         history.append({"role": "assistant", "content": ai_reply})
 
         return ai_reply
