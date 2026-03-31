@@ -10,7 +10,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
 
-@app.route("/", methods=["POST"])
+@app.route('/', methods=['POST'])
 def webhook():
     data = request.get_json()
 
@@ -18,8 +18,10 @@ def webhook():
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
+        # ответ от AI
         ai_response = ask_ai(text)
 
+        # отправка в Telegram
         requests.post(TELEGRAM_URL, json={
             "chat_id": chat_id,
             "text": ai_response
@@ -39,7 +41,7 @@ def ask_ai(user_text):
     data = {
         "model": "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": "Ты дружелюбный ассистент по имени Кузя. Отвечаешь просто, понятно и по-человечески."},
+            {"role": "system", "content": "Ты дружелюбный помощник по имени Кузя"},
             {"role": "user", "content": user_text}
         ]
     }
@@ -51,6 +53,10 @@ def ask_ai(user_text):
         return "Ошибка 😅 Попробуй ещё раз"
 
 
-@app.route("/health")
+@app.route('/health')
 def health():
     return "ok"
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
