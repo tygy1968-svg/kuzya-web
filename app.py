@@ -62,10 +62,10 @@ def ask_ai(user_text):
 """
 
     data = {
-        "model": "gpt-4o-mini",
+        "model": "gpt-4.1-mini",
         "messages": [
             {"role": "system", "content": system_prompt}
-        ] + history[-6:]  # последние 6 сообщений
+        ] + history[-10:]  # последние 6 сообщений
     }
 
     try:
