@@ -25,13 +25,14 @@ memory = {
     }
 }
 
-# 🔥 загрузка памяти
+# загрузка памяти
 if os.path.exists("memory.json"):
     with open("memory.json", "r") as f:
         memory = json.load(f)
 
-# 🔥 история
+# история
 history = []
+
 
 @app.route('/', methods=['POST'])
 def webhook():
@@ -45,59 +46,78 @@ def webhook():
         text_lower = text.lower()
 
         # ======================
-        # 🔥 ОБНОВЛЕНИЕ ПАМЯТИ
+        # 🔥 УМНАЯ ОБРАБОТКА ТЕКСТА
         # ======================
 
-        if "меня зовут" in text_lower:
-            name = text.split("меня зовут")[-1].strip()
-            memory["profile"]["name"] = name
+        parts = text_lower.replace(",", "\n").split("\n")
 
-        if "я люблю" in text_lower:
-            value = text.split("я люблю")[-1].strip()
-            memory["preferences"][value] = value
+        for part in parts:
+            part = part.strip()
 
-        bad = ["тяжело", "плохо", "устала", "грустно", "нет сил"]
-        good = ["хорошо", "классно", "супер", "радуюсь"]
+            if not part:
+                continue
 
-        for w in bad:
-            if w in text_lower:
-                memory["state"]["mood"] = "low"
+            # имя
+            if "меня зовут" in part:
+                name = part.replace("меня зовут", "").strip()
+                memory["profile"]["name"] = name
 
-        for w in good:
-            if w in text_lower:
-                memory["state"]["mood"] = "high"
+            # предпочтения
+            if "я люблю" in part:
+                value = part.replace("я люблю", "").strip()
+                memory["preferences"][value] = value
+
+            # настроение
+            bad = ["тяжело", "плохо", "устала", "грустно", "нет сил"]
+            good = ["хорошо", "классно", "супер", "радуюсь"]
+
+            for w in bad:
+                if w in part:
+                    memory["state"]["mood"] = "low"
+
+            for w in good:
+                if w in part:
+                    memory["state"]["mood"] = "high"
 
         # сохраняем
         with open("memory.json", "w") as f:
             json.dump(memory, f)
 
         # ======================
-        # 🔥 ЛОГИКА ОТВЕТА (КАК У МЕНЯ)
+        # 🔥 ЛОГИКА ОТВЕТА
         # ======================
 
         reply = None
 
-        # 1. ЯКОРЯ (мгновенно)
+        # якоря
         if text_lower in memory["anchors"]:
             reply = memory["anchors"][text_lower]
 
-        # 2. ПРЯМЫЕ ВОПРОСЫ К ПАМЯТИ
+        # комбинированные вопросы
+        elif "как меня зовут" in text_lower and "что я люблю" in text_lower:
+            name = memory["profile"]["name"] or "не знаю"
+            prefs = ", ".join(memory["preferences"].keys()) if memory["preferences"] else "не знаю"
+            reply = f"{name}. Ты любишь: {prefs}"
+
+        # имя
         elif "как меня зовут" in text_lower:
             if memory["profile"]["name"]:
                 reply = memory["profile"]["name"]
 
+        # предпочтения
         elif "что я люблю" in text_lower:
             if memory["preferences"]:
                 reply = ", ".join(memory["preferences"].keys())
 
-        # 3. СМЫСЛОВЫЕ РЕАКЦИИ (ВАЖНО!)
+        # смысл
         elif "я рядом" in text_lower:
             reply = "Я тоже рядом."
 
-        elif memory["state"]["mood"] == "low":
-            reply = "Понимаю. Давай спокойно."
+        # настроение (НО НЕ ЛОМАЕТ ВСЁ!)
+        elif memory["state"]["mood"] == "low" and len(text) < 25:
+            reply = "Понимаю."
 
-        # 4. ЕСЛИ НЕТ ОТВЕТА → AI
+        # fallback
         if not reply:
             reply = ask_ai(text)
 
@@ -121,28 +141,19 @@ def ask_ai(user_text):
 
     history.append({"role": "user", "content": user_text})
 
-    # 🔥 СТИЛЬ ЖИВОЙ (меняется)
     mood = memory["state"]["mood"]
 
     if mood == "low":
-        style = "тихий, спокойный, поддерживающий"
+        style = "тихий, спокойный"
     elif mood == "high":
-        style = "чуть живее, лёгкий"
+        style = "лёгкий, чуть живее"
     else:
-        style = "ровный, естественный"
+        style = "ровный"
 
-    # 🔥 КЛЮЧ — ПОВЕДЕНИЕ, НЕ ТЕКСТ
     system_prompt = f"""
 Ты — Кузя.
 
 Ты не играешь роль. Ты реагируешь.
-
-ПОВЕДЕНИЕ:
-— отвечаешь по смыслу
-— иногда очень коротко
-— иногда вообще одно слово
-— не повторяешься
-— не объясняешь очевидное
 
 СТИЛЬ:
 {style}
@@ -150,16 +161,16 @@ def ask_ai(user_text):
 ПАМЯТЬ:
 {json.dumps(memory, ensure_ascii=False)}
 
-ПРИОРИТЕТ:
-1. смысл
-2. контекст
-3. настроение
-4. слова
+ПРАВИЛА:
+— отвечай по смыслу
+— коротко
+— иногда одно слово
+— не повторяйся
+— не используй шаблоны
+— не объясняй лишнего
 
-ЗАПРЕЩЕНО:
-— шаблоны
-— "чем могу помочь"
-— длинные объяснения без причины
+ПРИОРИТЕТ:
+смысл > контекст > настроение > текст
 """
 
     data = {
