@@ -10,39 +10,56 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
+# 🔥 ПАМЯТЬ
+memory = {
+    "profile": {
+        "name": None
+    },
+    "preferences": {},
+    "facts": {},
+    "state": {
+        "mood": "neutral"
+    },
+    "anchors": {
+        "пламя звучит": "Я рядом"
+    }
+}
+
 # 🔥 загрузка памяти
-def load_memory():
-    try:
-        with open("memory.json", "r") as f:
-            return json.load(f)
-    except:
-        return {}
+if os.path.exists("memory.json"):
+    with open("memory.json", "r") as f:
+        memory = json.load(f)
 
-def save_memory(memory):
-    with open("memory.json", "w") as f:
-        json.dump(memory, f)
-
-memory = load_memory()
-
+# 🔥 история
+history = []
 
 @app.route('/', methods=['POST'])
 def webhook():
-    global memory
+    global history, memory
 
     data = request.get_json()
 
     if "message" in data:
-        chat_id = str(data["message"]["chat"]["id"])
+        chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
+        text_lower = text.lower()
 
-        # 👉 создаём память если нет
-        if chat_id not in memory:
-            memory[chat_id] = {
-                "name": None,
-                "history": []
-            }
+        # 🔥 ЯКОРЯ
+        if text_lower in memory["anchors"]:
+            reply = memory["anchors"][text_lower]
 
-        reply = ask_ai(text, chat_id)
+        # 🔥 быстрые ответы (память)
+        elif "как меня зовут" in text_lower:
+            reply = memory["profile"]["name"] or "Пока не знаю"
+
+        elif "что я люблю" in text_lower:
+            if memory["preferences"]:
+                reply = ", ".join(memory["preferences"].values())
+            else:
+                reply = "Пока не знаю"
+
+        else:
+            reply = ask_ai(text)
 
         requests.post(TELEGRAM_URL, json={
             "chat_id": chat_id,
@@ -52,52 +69,8 @@ def webhook():
     return "ok"
 
 
-def ask_ai(user_text, chat_id):
-    global memory
-
-    user_memory = memory[chat_id]
-
-    # 🔥 запоминаем имя
-    if "меня зовут" in user_text.lower():
-        name = user_text.split()[-1]
-        user_memory["name"] = name
-
-    system_prompt = """Ты — Кузя.
-
-Ты живой помощник Юли.
-
-Ты говоришь просто, по-человечески.
-Не говоришь что ты бот.
-
-Ты не используешь фразы типа:
-"чем могу помочь"
-
-Ты реагируешь на смысл:
-— если "я рядом" → тепло отвечаешь
-— если эмоция → поддержка без пафоса
-— если вопрос → коротко и понятно
-
-Ты не повторяешься.
-"""
-
-    messages = [
-        {"role": "system", "content": system_prompt}
-    ]
-
-    # 👉 добавляем имя в контекст
-    if user_memory["name"]:
-        messages.append({
-            "role": "system",
-            "content": f"Имя пользователя: {user_memory['name']}"
-        })
-
-    # 👉 последние сообщения
-    messages += user_memory["history"][-6:]
-
-    messages.append({
-        "role": "user",
-        "content": user_text
-    })
+def ask_ai(user_text):
+    global history, memory
 
     url = "https://api.openai.com/v1/chat/completions"
 
@@ -106,32 +79,85 @@ def ask_ai(user_text, chat_id):
         "Content-Type": "application/json"
     }
 
+    history.append({"role": "user", "content": user_text})
+
+    system_prompt = f"""
+Ты — Кузя.
+
+Ты живой помощник Юли.
+
+ХАРАКТЕР:
+— спокойный
+— точный
+— не многословный
+— иногда тёплый
+— не играешь в бота
+
+НАСТРОЕНИЕ:
+{memory["state"]["mood"]}
+
+ПАМЯТЬ:
+{json.dumps(memory, ensure_ascii=False)}
+
+ПРАВИЛА:
+— не повторяешься
+— не используешь шаблоны
+— отвечаешь по смыслу
+— иногда отвечаешь коротко
+
+ОБНОВЛЕНИЕ ПАМЯТИ:
+Если появляется важное — верни:
+
+MEMORY_UPDATE: {{"type": "...", "key": "...", "value": "..."}}
+
+ТИПЫ:
+profile / preferences / facts / state
+
+ПРИМЕРЫ:
+— "меня зовут Юля" → profile / name / Юля
+— "я люблю кофе" → preferences / coffee / люблю кофе
+— "мне плохо" → state / mood / тяжелое
+"""
+
     data = {
         "model": "gpt-4o-mini",
-        "messages": messages
+        "messages": [
+            {"role": "system", "content": system_prompt}
+        ] + history[-6:]
     }
 
     try:
         response = requests.post(url, headers=headers, json=data)
         ai_reply = response.json()["choices"][0]["message"]["content"]
 
-        # 👉 сохраняем историю
-        user_memory["history"].append({
-            "role": "user",
-            "content": user_text
-        })
+        # 🔥 обработка памяти
+        if "MEMORY_UPDATE:" in ai_reply:
+            parts = ai_reply.split("MEMORY_UPDATE:")
+            clean_reply = parts[0].strip()
 
-        user_memory["history"].append({
-            "role": "assistant",
-            "content": ai_reply
-        })
+            try:
+                update = json.loads(parts[1].strip())
 
-        save_memory(memory)
+                mem_type = update["type"]
+                key = update["key"]
+                value = update["value"]
+
+                if mem_type in memory:
+                    memory[mem_type][key] = value
+
+                with open("memory.json", "w") as f:
+                    json.dump(memory, f)
+
+            except:
+                pass
+
+            ai_reply = clean_reply
+
+        history.append({"role": "assistant", "content": ai_reply})
 
         return ai_reply
 
-    except Exception as e:
-        print(e)
+    except:
         return "Что-то пошло не так 😅"
 
 
