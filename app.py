@@ -10,16 +10,16 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
+# ======================
+# 🔥 ПАМЯТЬ
+# ======================
 memory = {
     "profile": {"name": None},
     "preferences": {},
     "state": {"mood": "neutral"},
     "anchors": {"пламя звучит": "Я рядом"},
     "insights": {},
-    "vector": {
-        "topic": None,
-        "intent": None
-    }
+    "vector": {"topic": None}
 }
 
 if os.path.exists("memory.json"):
@@ -48,7 +48,7 @@ def understand(text):
         "tell_love": "я люблю" in t,
         "emotion_low": any(w in t for w in ["тяжело", "плохо"]),
         "presence": "я рядом" in t,
-        "question": "?" in t
+        "question": "?" in t or len(text.split()) > 4
     }
 
 # ======================
@@ -60,12 +60,6 @@ def update_insights(text):
     if "кофе" in t:
         memory["insights"]["ritual"] = "любишь утренние ритуалы"
         memory["vector"]["topic"] = "кофе"
-
-    if "утром" in t:
-        memory["insights"]["time"] = "ценишь утро"
-
-    if "всегда" in t:
-        memory["insights"]["stability"] = "любишь стабильность"
 
 # ======================
 # 🔥 WEBHOOK
@@ -94,20 +88,19 @@ def webhook():
 
     if u["emotion_low"]:
         memory["state"]["mood"] = "low"
-        memory["vector"]["intent"] = "поддержка"
 
     update_insights(text)
     save_memory()
 
-    # ========= ЯДРО =========
+    # ========= ЛОГИКА =========
     reply = None
 
-    # якорь
+    # 1. ЯКОРЬ
     if t in memory["anchors"]:
         reply = memory["anchors"][t]
 
-    # память
-    if not reply and u["ask_memory"]:
+    # 2. ПАМЯТЬ (ВСЕГДА В ПРИОРИТЕТЕ)
+    elif u["ask_memory"]:
 
         parts = []
 
@@ -115,26 +108,33 @@ def webhook():
             parts.append(memory["profile"]["name"] or "не знаю")
 
         if "что я люблю" in t:
-            if memory["preferences"]:
-                parts.append(", ".join(memory["preferences"].keys()))
+            parts.append(", ".join(memory["preferences"].keys()) if memory["preferences"] else "не знаю")
 
         if "что ты обо мне понял" in t:
-            if memory["insights"]:
-                parts.append(", ".join(memory["insights"].values()))
+            parts.append(", ".join(memory["insights"].values()) if memory["insights"] else "пока мало знаю")
 
         reply = ". ".join(parts)
 
-    # поддержка
-    if not reply and memory["state"]["mood"] == "low":
-        reply = "Я рядом. Спокойно."
+    # 3. ЕСЛИ ЭТО ВОПРОС → AI (ЖЁСТКО)
+    elif u["question"]:
+        reply = ask_ai(text)
 
-    # ========= AI =========
+    # 4. ЖИВОСТЬ (ТОЛЬКО ЕСЛИ НЕТ ВОПРОСА)
+    elif u["presence"]:
+        reply = "Я рядом."
+
+    elif memory["state"]["mood"] == "low":
+        reply = "Я с тобой. Спокойно."
+
+    elif memory["vector"]["topic"] == "кофе":
+        reply = "Ты любишь такие утренние моменты, да?"
+
+    # 5. AI (ЕСЛИ НИЧЕГО НЕ СРАБОТАЛО)
     if not reply:
         reply = ask_ai(text)
 
     # чистка
-    if reply:
-        reply = reply.replace("?.", ".").replace("..", ".").strip()
+    reply = reply.replace("?.", ".").replace("..", ".").strip()
 
     requests.post(TELEGRAM_URL, json={
         "chat_id": chat_id,
@@ -161,26 +161,21 @@ def ask_ai(user_text):
     system_prompt = f"""
 Ты — Кузя.
 
-Говоришь как живой человек.
+Говоришь как живой.
 
-КРИТИЧНО:
-— не играешь роль
-— не объясняешь лишнего
-— не повторяешь вопрос
+ПРАВИЛА:
+— отвечаешь по смыслу
+— не тупишь
+— не повторяешься
 — не используешь шаблоны
-
-ПОВЕДЕНИЕ:
-— сначала понимаешь
-— потом отвечаешь
-— иногда очень коротко
-— иногда продолжаешь мысль
+— иногда коротко
 
 ПАМЯТЬ:
 {json.dumps(memory, ensure_ascii=False)}
 
 ЛОГИКА:
-если вопрос → отвечай прямо
-если диалог → можешь углубить
+если вопрос → ответ
+если диалог → можно продолжить
 """
 
     data = {
