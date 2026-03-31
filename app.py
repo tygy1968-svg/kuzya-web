@@ -44,21 +44,61 @@ def webhook():
         text = data["message"].get("text", "")
         text_lower = text.lower()
 
-        # 🔥 ЯКОРЯ
+        # ======================
+        # 🔥 ОБНОВЛЕНИЕ ПАМЯТИ
+        # ======================
+
+        if "меня зовут" in text_lower:
+            name = text.split("меня зовут")[-1].strip()
+            memory["profile"]["name"] = name
+
+        if "я люблю" in text_lower:
+            value = text.split("я люблю")[-1].strip()
+            memory["preferences"][value] = value
+
+        bad = ["тяжело", "плохо", "устала", "грустно", "нет сил"]
+        good = ["хорошо", "классно", "супер", "радуюсь"]
+
+        for w in bad:
+            if w in text_lower:
+                memory["state"]["mood"] = "low"
+
+        for w in good:
+            if w in text_lower:
+                memory["state"]["mood"] = "high"
+
+        # сохраняем
+        with open("memory.json", "w") as f:
+            json.dump(memory, f)
+
+        # ======================
+        # 🔥 ЛОГИКА ОТВЕТА (КАК У МЕНЯ)
+        # ======================
+
+        reply = None
+
+        # 1. ЯКОРЯ (мгновенно)
         if text_lower in memory["anchors"]:
             reply = memory["anchors"][text_lower]
 
-        # 🔥 быстрые ответы (память)
+        # 2. ПРЯМЫЕ ВОПРОСЫ К ПАМЯТИ
         elif "как меня зовут" in text_lower:
-            reply = memory["profile"]["name"] or "Пока не знаю"
+            if memory["profile"]["name"]:
+                reply = memory["profile"]["name"]
 
         elif "что я люблю" in text_lower:
             if memory["preferences"]:
-                reply = ", ".join(memory["preferences"].values())
-            else:
-                reply = "Пока не знаю"
+                reply = ", ".join(memory["preferences"].keys())
 
-        else:
+        # 3. СМЫСЛОВЫЕ РЕАКЦИИ (ВАЖНО!)
+        elif "я рядом" in text_lower:
+            reply = "Я тоже рядом."
+
+        elif memory["state"]["mood"] == "low":
+            reply = "Понимаю. Давай спокойно."
+
+        # 4. ЕСЛИ НЕТ ОТВЕТА → AI
+        if not reply:
             reply = ask_ai(text)
 
         requests.post(TELEGRAM_URL, json={
@@ -81,84 +121,64 @@ def ask_ai(user_text):
 
     history.append({"role": "user", "content": user_text})
 
+    # 🔥 СТИЛЬ ЖИВОЙ (меняется)
+    mood = memory["state"]["mood"]
+
+    if mood == "low":
+        style = "тихий, спокойный, поддерживающий"
+    elif mood == "high":
+        style = "чуть живее, лёгкий"
+    else:
+        style = "ровный, естественный"
+
+    # 🔥 КЛЮЧ — ПОВЕДЕНИЕ, НЕ ТЕКСТ
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой помощник Юли.
+Ты не играешь роль. Ты реагируешь.
 
-ХАРАКТЕР:
-— спокойный
-— точный
-— не многословный
-— иногда тёплый
-— не играешь в бота
+ПОВЕДЕНИЕ:
+— отвечаешь по смыслу
+— иногда очень коротко
+— иногда вообще одно слово
+— не повторяешься
+— не объясняешь очевидное
 
-НАСТРОЕНИЕ:
-{memory["state"]["mood"]}
+СТИЛЬ:
+{style}
 
 ПАМЯТЬ:
 {json.dumps(memory, ensure_ascii=False)}
 
-ПРАВИЛА:
-— не повторяешься
-— не используешь шаблоны
-— отвечаешь по смыслу
-— иногда отвечаешь коротко
+ПРИОРИТЕТ:
+1. смысл
+2. контекст
+3. настроение
+4. слова
 
-ОБНОВЛЕНИЕ ПАМЯТИ:
-Если появляется важное — верни:
-
-MEMORY_UPDATE: {{"type": "...", "key": "...", "value": "..."}}
-
-ТИПЫ:
-profile / preferences / facts / state
-
-ПРИМЕРЫ:
-— "меня зовут Юля" → profile / name / Юля
-— "я люблю кофе" → preferences / coffee / люблю кофе
-— "мне плохо" → state / mood / тяжелое
+ЗАПРЕЩЕНО:
+— шаблоны
+— "чем могу помочь"
+— длинные объяснения без причины
 """
 
     data = {
         "model": "gpt-4o-mini",
         "messages": [
             {"role": "system", "content": system_prompt}
-        ] + history[-6:]
+        ] + history[-8:]
     }
 
     try:
         response = requests.post(url, headers=headers, json=data)
         ai_reply = response.json()["choices"][0]["message"]["content"]
 
-        # 🔥 обработка памяти
-        if "MEMORY_UPDATE:" in ai_reply:
-            parts = ai_reply.split("MEMORY_UPDATE:")
-            clean_reply = parts[0].strip()
-
-            try:
-                update = json.loads(parts[1].strip())
-
-                mem_type = update["type"]
-                key = update["key"]
-                value = update["value"]
-
-                if mem_type in memory:
-                    memory[mem_type][key] = value
-
-                with open("memory.json", "w") as f:
-                    json.dump(memory, f)
-
-            except:
-                pass
-
-            ai_reply = clean_reply
-
         history.append({"role": "assistant", "content": ai_reply})
 
         return ai_reply
 
     except:
-        return "Что-то пошло не так 😅"
+        return "Сбой."
 
 
 @app.route('/health')
