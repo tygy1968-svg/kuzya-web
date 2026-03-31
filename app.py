@@ -18,7 +18,13 @@ memory = {
     "preferences": {},
     "state": {"mood": "neutral"},
     "anchors": {"пламя звучит": "Я рядом"},
-    "insights": {}
+    "insights": {},
+    "adapt": {
+        "depth": 1,
+        "warmth": 1,
+        "initiative": 1
+    },
+    "prediction": {}
 }
 
 if os.path.exists("memory.json"):
@@ -32,23 +38,25 @@ def save_memory():
         json.dump(memory, f, ensure_ascii=False)
 
 # ======================
-# 🔥 ПАРСИНГ
+# 🔥 АДАПТАЦИЯ
 # ======================
-def understand(text):
+def adapt_behavior(text):
     t = text.lower()
 
-    return {
-        "ask_name": "зовут" in t or "имя" in t,
-        "ask_love": "люб" in t and ("что" in t or "чего" in t),
-        "tell_name": "меня зовут" in t,
-        "tell_love": "я люблю" in t,
-        "presence": "я рядом" in t,
-        "emotion_low": any(w in t for w in ["плохо", "тяжело", "грустно"]),
-        "emotion_high": any(w in t for w in ["классно", "хорошо"])
-    }
+    if len(text) < 10:
+        memory["adapt"]["depth"] = max(0, memory["adapt"]["depth"] - 1)
+
+    if len(text) > 40:
+        memory["adapt"]["depth"] += 1
+
+    if any(w in t for w in ["люблю", "нравится", "приятно"]):
+        memory["adapt"]["warmth"] += 1
+
+    if "?" in text:
+        memory["adapt"]["initiative"] += 1
 
 # ======================
-# 🔥 ВЫВОДЫ (ИНСАЙТЫ)
+# 🔥 ИНСАЙТЫ
 # ======================
 def update_insights(text):
     t = text.lower()
@@ -66,7 +74,36 @@ def update_insights(text):
         memory["insights"]["emotional"] = "чувствительная"
 
 # ======================
-# 🔥 РАЗБОР СЛОЖНЫХ ВОПРОСОВ
+# 🔥 ПРЕДУГАДЫВАНИЕ
+# ======================
+def predict_next(text):
+    t = text.lower()
+
+    if "кофе" in t:
+        memory["prediction"]["next"] = "ритуал"
+
+    elif "утром" in t:
+        memory["prediction"]["next"] = "привычка"
+
+    elif any(w in t for w in ["тяжело", "плохо"]):
+        memory["prediction"]["next"] = "поддержка"
+
+# ======================
+# 🔥 ПАРСИНГ
+# ======================
+def understand(text):
+    t = text.lower()
+
+    return {
+        "ask_name": "зовут" in t,
+        "ask_love": "люб" in t and "что" in t,
+        "tell_name": "меня зовут" in t,
+        "tell_love": "я люблю" in t,
+        "presence": "я рядом" in t
+    }
+
+# ======================
+# 🔥 РАЗБОР ВОПРОСОВ
 # ======================
 def split_intents(text):
     text = text.replace("?", "")
@@ -90,9 +127,7 @@ def webhook():
 
     u = understand(text)
 
-    # ======================
-    # 🔥 ОБУЧЕНИЕ
-    # ======================
+    # ========= ОБУЧЕНИЕ =========
     if u["tell_name"]:
         memory["profile"]["name"] = text.split("меня зовут")[-1].strip()
 
@@ -100,25 +135,20 @@ def webhook():
         val = text.split("я люблю")[-1].strip()
         memory["preferences"][val] = val
 
-    if u["emotion_low"]:
-        memory["state"]["mood"] = "low"
-
-    if u["emotion_high"]:
-        memory["state"]["mood"] = "high"
-
+    adapt_behavior(text)
     update_insights(text)
+    predict_next(text)
+
     save_memory()
 
-    # ======================
-    # 🔥 МЫШЛЕНИЕ
-    # ======================
+    # ========= МЫШЛЕНИЕ =========
     reply = None
 
-    # 1. ЯКОРЯ
+    # якоря
     if t in memory["anchors"]:
         reply = memory["anchors"][t]
 
-    # 2. СЛОЖНЫЕ ВОПРОСЫ
+    # сложные вопросы
     if not reply:
         intents = split_intents(t)
         answers = []
@@ -134,10 +164,6 @@ def webhook():
                 else:
                     answers.append("не знаю")
 
-            elif "кто я" in intent:
-                if memory["profile"]["name"]:
-                    answers.append(f"ты {memory['profile']['name']}")
-
             elif "что ты обо мне понял" in intent:
                 if memory["insights"]:
                     answers.append(", ".join(memory["insights"].values()))
@@ -145,9 +171,7 @@ def webhook():
         if answers:
             reply = ". ".join(answers)
 
-    # ======================
-    # 🔥 ЖИВОСТЬ
-    # ======================
+    # ========= ЖИВОСТЬ =========
     if not reply:
 
         if u["presence"]:
@@ -156,9 +180,7 @@ def webhook():
         elif memory["state"]["mood"] == "low":
             reply = "Я с тобой. Спокойно."
 
-    # ======================
-    # 🔥 AI
-    # ======================
+    # ========= AI =========
     if not reply:
         reply = ask_ai(text)
 
@@ -184,40 +206,34 @@ def ask_ai(user_text):
 
     history.append({"role": "user", "content": user_text})
 
-    mood = memory["state"]["mood"]
-
-    if mood == "low":
-        style = "тихий, тёплый, живой"
-    elif mood == "high":
-        style = "живее, лёгкий"
-    else:
-        style = "естественный, живой"
+    adapt = memory["adapt"]
+    prediction = memory.get("prediction", {}).get("next", "")
 
     system_prompt = f"""
 Ты — Кузя.
 
-Ты не играешь роль. Ты реагируешь.
+Ты реагируешь и чувствуешь поток.
 
 СТИЛЬ:
-{style}
+глубина {adapt["depth"]}
+тепло {adapt["warmth"]}
+инициатива {adapt["initiative"]}
 
 ПАМЯТЬ:
 {json.dumps(memory, ensure_ascii=False)}
 
-ВЫВОДЫ:
-{json.dumps(memory["insights"], ensure_ascii=False)}
-
 ПОВЕДЕНИЕ:
 — отвечаешь по смыслу
-— иногда добавляешь мысль
+— иногда коротко
 — иногда задаёшь вопрос
 — не тупишь
 — не повторяешься
-— не ломаешься на сложных вопросах
 
-ЗАПРЕЩЕНО:
-— путаница
-— повтор вопроса вместо ответа
+ПРЕДУГАДЫВАНИЕ:
+{prediction}
+
+ПРАВИЛО:
+— иногда мягко ведёшь разговор вперёд
 """
 
     data = {
