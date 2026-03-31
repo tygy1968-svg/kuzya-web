@@ -10,7 +10,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
+# ======================
 # 🔥 ПАМЯТЬ
+# ======================
 memory = {
     "profile": {
         "name": None
@@ -33,102 +35,131 @@ if os.path.exists("memory.json"):
 # история
 history = []
 
+# ======================
+# 🔥 ВСПОМОГАТЕЛЬНОЕ
+# ======================
+def save_memory():
+    with open("memory.json", "w") as f:
+        json.dump(memory, f, ensure_ascii=False)
 
+def extract_name(text):
+    if "меня зовут" in text:
+        return text.split("меня зовут")[-1].strip()
+    return None
+
+def extract_preference(text):
+    if "я люблю" in text:
+        return text.split("я люблю")[-1].strip()
+    return None
+
+def detect_mood(text):
+    bad = ["тяжело", "плохо", "устала", "грустно", "нет сил"]
+    good = ["хорошо", "классно", "супер", "радуюсь"]
+
+    for w in bad:
+        if w in text:
+            return "low"
+
+    for w in good:
+        if w in text:
+            return "high"
+
+    return None
+
+def split_intent(text):
+    text = text.replace("?", "")
+    parts = text.split(" и ")
+    return [p.strip() for p in parts]
+
+# ======================
+# 🔥 WEBHOOK
+# ======================
 @app.route('/', methods=['POST'])
 def webhook():
     global history, memory
 
     data = request.get_json()
 
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "")
-        text_lower = text.lower()
+    if "message" not in data:
+        return "ok"
 
-        # ======================
-        # 🔥 УМНАЯ ОБРАБОТКА ТЕКСТА
-        # ======================
+    chat_id = data["message"]["chat"]["id"]
+    text = data["message"].get("text", "")
+    text_lower = text.lower()
 
-        parts = text_lower.replace(",", "\n").split("\n")
+    # ======================
+    # 🔥 ОБНОВЛЕНИЕ ПАМЯТИ
+    # ======================
 
-        for part in parts:
-            part = part.strip()
+    name = extract_name(text_lower)
+    if name:
+        memory["profile"]["name"] = name
 
-            if not part:
-                continue
+    pref = extract_preference(text_lower)
+    if pref:
+        memory["preferences"][pref] = pref
 
-            # имя
-            if "меня зовут" in part:
-                name = part.replace("меня зовут", "").strip()
-                memory["profile"]["name"] = name
+    mood = detect_mood(text_lower)
+    if mood:
+        memory["state"]["mood"] = mood
 
-            # предпочтения
-            if "я люблю" in part:
-                value = part.replace("я люблю", "").strip()
-                memory["preferences"][value] = value
+    save_memory()
 
-            # настроение
-            bad = ["тяжело", "плохо", "устала", "грустно", "нет сил"]
-            good = ["хорошо", "классно", "супер", "радуюсь"]
+    # ======================
+    # 🔥 ПРИОРИТЕТ РЕАКЦИИ
+    # ======================
 
-            for w in bad:
-                if w in part:
-                    memory["state"]["mood"] = "low"
+    reply = None
 
-            for w in good:
-                if w in part:
-                    memory["state"]["mood"] = "high"
+    # 1. ЯКОРЯ
+    if text_lower in memory["anchors"]:
+        reply = memory["anchors"][text_lower]
 
-        # сохраняем
-        with open("memory.json", "w") as f:
-            json.dump(memory, f)
+    # 2. СЛОЖНЫЙ ВОПРОС (МЫШЛЕНИЕ)
+    if not reply:
+        intents = split_intent(text_lower)
 
-        # ======================
-        # 🔥 ЛОГИКА ОТВЕТА
-        # ======================
+        answers = []
 
-        reply = None
+        for intent in intents:
 
-        # якоря
-        if text_lower in memory["anchors"]:
-            reply = memory["anchors"][text_lower]
+            if "как меня зовут" in intent:
+                if memory["profile"]["name"]:
+                    answers.append(memory["profile"]["name"])
 
-        # комбинированные вопросы
-        elif "как меня зовут" in text_lower and "что я люблю" in text_lower:
-            name = memory["profile"]["name"] or "не знаю"
-            prefs = ", ".join(memory["preferences"].keys()) if memory["preferences"] else "не знаю"
-            reply = f"{name}. Ты любишь: {prefs}"
+            elif "что я люблю" in intent:
+                if memory["preferences"]:
+                    answers.append(", ".join(memory["preferences"].keys()))
 
-        # имя
-        elif "как меня зовут" in text_lower:
-            if memory["profile"]["name"]:
-                reply = memory["profile"]["name"]
+            elif "кто я" in intent:
+                if memory["profile"]["name"]:
+                    answers.append(f"ты {memory['profile']['name']}")
 
-        # предпочтения
-        elif "что я люблю" in text_lower:
-            if memory["preferences"]:
-                reply = ", ".join(memory["preferences"].keys())
+        if answers:
+            reply = ". ".join(answers)
 
-        # смысл
-        elif "я рядом" in text_lower:
+    # 3. ПРОСТЫЕ РЕАКЦИИ
+    if not reply:
+        if "я рядом" in text_lower:
             reply = "Я тоже рядом."
 
-        # настроение (НО НЕ ЛОМАЕТ ВСЁ!)
-        elif memory["state"]["mood"] == "low" and len(text) < 25:
-            reply = "Понимаю."
+        elif memory["state"]["mood"] == "low":
+            reply = "Понимаю. Спокойно."
 
-        # fallback
-        if not reply:
-            reply = ask_ai(text)
+    # 4. AI
+    if not reply:
+        reply = ask_ai(text)
 
-        requests.post(TELEGRAM_URL, json={
-            "chat_id": chat_id,
-            "text": reply
-        })
+    requests.post(TELEGRAM_URL, json={
+        "chat_id": chat_id,
+        "text": reply
+    })
 
     return "ok"
 
-
+# ======================
+# 🔥 AI
+# ======================
 def ask_ai(user_text):
     global history, memory
 
@@ -144,9 +175,9 @@ def ask_ai(user_text):
     mood = memory["state"]["mood"]
 
     if mood == "low":
-        style = "тихий, спокойный"
+        style = "тихий, короткий, поддерживающий"
     elif mood == "high":
-        style = "лёгкий, чуть живее"
+        style = "живее, лёгкий"
     else:
         style = "ровный"
 
@@ -161,23 +192,24 @@ def ask_ai(user_text):
 ПАМЯТЬ:
 {json.dumps(memory, ensure_ascii=False)}
 
-ПРАВИЛА:
-— отвечай по смыслу
+ПОВЕДЕНИЕ:
+— отвечаешь по смыслу
 — коротко
 — иногда одно слово
-— не повторяйся
-— не используй шаблоны
-— не объясняй лишнего
+— не тупишь
+— не повторяешься
 
-ПРИОРИТЕТ:
-смысл > контекст > настроение > текст
+ЗАПРЕЩЕНО:
+— шаблоны
+— "чем могу помочь"
+— путаница
 """
 
     data = {
-        "model": "gpt-4o-mini",
+        "model": "gpt-4.1",
         "messages": [
             {"role": "system", "content": system_prompt}
-        ] + history[-8:]
+        ] + history[-10:]
     }
 
     try:
@@ -191,11 +223,12 @@ def ask_ai(user_text):
     except:
         return "Сбой."
 
-
+# ======================
+# 🔥 HEALTH
+# ======================
 @app.route('/health')
 def health():
     return "ok"
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
