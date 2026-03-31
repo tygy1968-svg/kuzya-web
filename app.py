@@ -1,4 +1,3 @@
-
 from flask import Flask, request
 import requests
 import os
@@ -10,7 +9,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-@app.route('/', methods=['POST'])
+
+@app.route("/", methods=["POST"])
 def webhook():
     data = request.get_json()
 
@@ -18,10 +18,8 @@ def webhook():
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
-        # 👉 запрос к AI
         ai_response = ask_ai(text)
 
-        # 👉 отправка ответа в Telegram
         requests.post(TELEGRAM_URL, json={
             "chat_id": chat_id,
             "text": ai_response
@@ -41,18 +39,18 @@ def ask_ai(user_text):
     data = {
         "model": "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": "Ты — Кузя. Живой, спокойный, дружелюбный ассистент. Говоришь просто и по делу."},
+            {"role": "system", "content": "Ты дружелюбный ассистент по имени Кузя. Отвечаешь просто, понятно и по-человечески."},
             {"role": "user", "content": user_text}
         ]
     }
 
-    response = requests.post(url, headers=headers, json=data)
-
     try:
+        response = requests.post(url, headers=headers, json=data)
         return response.json()["choices"][0]["message"]["content"]
     except:
-        return "Что-то пошло не так 😅"
+        return "Ошибка 😅 Попробуй ещё раз"
 
-@app.route('/health')
+
+@app.route("/health")
 def health():
     return "ok"
