@@ -1,6 +1,7 @@
 from flask import Flask, request
 import requests
 import os
+import json
 
 app = Flask(__name__)
 
@@ -9,41 +10,39 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-# 🔥 память
-memory = {
-    "name": None,
-    "anchors": {
-        "пламя звучит": "Я рядом"
-    }
-}
+# 🔥 загрузка памяти
+def load_memory():
+    try:
+        with open("memory.json", "r") as f:
+            return json.load(f)
+    except:
+        return {}
 
-# 🔥 история диалога
-history = []
+def save_memory(memory):
+    with open("memory.json", "w") as f:
+        json.dump(memory, f)
+
+memory = load_memory()
 
 
 @app.route('/', methods=['POST'])
 def webhook():
-    global history, memory
+    global memory
 
     data = request.get_json()
 
     if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
+        chat_id = str(data["message"]["chat"]["id"])
         text = data["message"].get("text", "")
 
-        text_lower = text.lower()
+        # 👉 создаём память если нет
+        if chat_id not in memory:
+            memory[chat_id] = {
+                "name": None,
+                "history": []
+            }
 
-        # 🔥 обработка якорей (быстро, без AI)
-        if text_lower in memory["anchors"]:
-            reply = memory["anchors"][text_lower]
-
-        else:
-            # 🔥 запоминаем имя
-            if "меня зовут" in text_lower:
-                name = text_lower.split("меня зовут")[-1].strip().capitalize()
-                memory["name"] = name
-
-            reply = ask_ai(text)
+        reply = ask_ai(text, chat_id)
 
         requests.post(TELEGRAM_URL, json={
             "chat_id": chat_id,
@@ -53,8 +52,52 @@ def webhook():
     return "ok"
 
 
-def ask_ai(user_text):
-    global history, memory
+def ask_ai(user_text, chat_id):
+    global memory
+
+    user_memory = memory[chat_id]
+
+    # 🔥 запоминаем имя
+    if "меня зовут" in user_text.lower():
+        name = user_text.split()[-1]
+        user_memory["name"] = name
+
+    system_prompt = """Ты — Кузя.
+
+Ты живой помощник Юли.
+
+Ты говоришь просто, по-человечески.
+Не говоришь что ты бот.
+
+Ты не используешь фразы типа:
+"чем могу помочь"
+
+Ты реагируешь на смысл:
+— если "я рядом" → тепло отвечаешь
+— если эмоция → поддержка без пафоса
+— если вопрос → коротко и понятно
+
+Ты не повторяешься.
+"""
+
+    messages = [
+        {"role": "system", "content": system_prompt}
+    ]
+
+    # 👉 добавляем имя в контекст
+    if user_memory["name"]:
+        messages.append({
+            "role": "system",
+            "content": f"Имя пользователя: {user_memory['name']}"
+        })
+
+    # 👉 последние сообщения
+    messages += user_memory["history"][-6:]
+
+    messages.append({
+        "role": "user",
+        "content": user_text
+    })
 
     url = "https://api.openai.com/v1/chat/completions"
 
@@ -63,55 +106,32 @@ def ask_ai(user_text):
         "Content-Type": "application/json"
     }
 
-    # 🔥 добавляем сообщение пользователя
-    history.append({"role": "user", "content": user_text})
-
-    # 🔥 память в текст
-    memory_text = ""
-
-    if memory["name"]:
-        memory_text += f"Пользователя зовут {memory['name']}.\n"
-
-    # 🔥 system prompt (очень важный)
-    system_prompt = f"""
-Ты — Кузя. Ты живой помощник Юли.
-
-{memory_text}
-
-Ты говоришь просто, по-человечески.
-Без канцелярии. Без шаблонных фраз.
-
-НЕ говоришь:
-— "чем могу помочь"
-— "я ассистент"
-— "я бот"
-
-Ты реагируешь на смысл:
-— эмоция → спокойно поддерживаешь
-— вопрос → коротко отвечаешь
-— простое сообщение → живой короткий отклик
-
-Если человек пишет "я рядом" → отвечаешь спокойно и по делу.
-Ты не многословный. Не повторяешься.
-"""
-
     data = {
-        "model": "gpt-4.1-mini",
-        "messages": [
-            {"role": "system", "content": system_prompt}
-        ] + history[-10:]
+        "model": "gpt-4o-mini",
+        "messages": messages
     }
 
     try:
         response = requests.post(url, headers=headers, json=data)
         ai_reply = response.json()["choices"][0]["message"]["content"]
 
-        # 🔥 сохраняем ответ
-        history.append({"role": "assistant", "content": ai_reply})
+        # 👉 сохраняем историю
+        user_memory["history"].append({
+            "role": "user",
+            "content": user_text
+        })
+
+        user_memory["history"].append({
+            "role": "assistant",
+            "content": ai_reply
+        })
+
+        save_memory(memory)
 
         return ai_reply
 
-    except:
+    except Exception as e:
+        print(e)
         return "Что-то пошло не так 😅"
 
 
