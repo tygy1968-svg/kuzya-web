@@ -46,8 +46,7 @@ def understand(text):
         ]),
         "ask_love": any(q in t for q in [
             "что я люблю",
-            "что мне нравится",
-            "что я люблю?"
+            "что мне нравится"
         ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
@@ -81,7 +80,7 @@ def webhook():
 
     if u["tell_love"]:
         val = text.split("я люблю")[-1].strip()
-        memory["preferences"][val] = val
+        memory["preferences"]["likes"] = val
 
     if u["emotion_low"]:
         memory["state"]["mood"] = "low"
@@ -92,7 +91,7 @@ def webhook():
     save_memory()
 
     # ======================
-    # 🔥 ЛОГИКА
+    # 🔥 ЛОГИКА (ФИКС)
     # ======================
     reply = None
 
@@ -100,31 +99,27 @@ def webhook():
     if t in memory["anchors"]:
         reply = memory["anchors"][t]
 
-    # 2. КОМБИНИРОВАННЫЙ ВОПРОС
+    # 2. КОМБО ВОПРОС
     elif u["ask_name"] and u["ask_love"]:
-        name = memory["profile"]["name"] or "не знаю"
-        love = ", ".join(memory["preferences"].keys()) if memory["preferences"] else "не знаю"
+        name = memory["profile"]["name"] or "ты ещё не говорила"
+        love = memory["preferences"].get("likes", "ты ещё не говорила")
         reply = f"{name}. {love}"
 
-    # 3. ПАМЯТЬ
+    # 3. ПАМЯТЬ — ПРИОРИТЕТ
     elif u["ask_name"]:
-        reply = memory["profile"]["name"] or "не знаю"
+        reply = memory["profile"]["name"] or "ты ещё не говорила"
 
     elif u["ask_love"]:
-        reply = ", ".join(memory["preferences"].keys()) if memory["preferences"] else "не знаю"
+        reply = memory["preferences"].get("likes", "ты ещё не говорила")
 
-    # 4. ВОПРОС → AI
-    elif "?" in text:
-        reply = ask_ai(text)
-
-    # 5. СОСТОЯНИЕ
+    # 4. СОСТОЯНИЕ
     elif u["presence"]:
         reply = "Я рядом."
 
     elif memory["state"]["mood"] == "low":
         reply = "Я с тобой."
 
-    # 6. FALLBACK
+    # 5. ВСЁ ОСТАЛЬНОЕ → AI
     if not reply:
         reply = ask_ai(text)
 
@@ -156,7 +151,7 @@ def ask_ai(user_text):
     mood = memory["state"]["mood"]
 
     if mood == "low":
-        style = "спокойный, поддерживающий"
+        style = "спокойный, мягкий, поддерживающий"
     elif mood == "high":
         style = "живой, лёгкий"
     else:
@@ -165,20 +160,24 @@ def ask_ai(user_text):
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой.
-
-СТИЛЬ:
-{style}
+Ты живой и последовательный.
 
 ПАМЯТЬ:
 {json.dumps(memory, ensure_ascii=False)}
 
+ВАЖНО:
+— если знаешь имя → используешь его
+— если знаешь предпочтения → используешь их
+— не говоришь "не знаю", если данные есть
+
+СТИЛЬ:
+{style}
+
 ПОВЕДЕНИЕ:
 — отвечаешь по смыслу
-— не игнорируешь вопрос
+— не тупишь
 — не повторяешься
 — иногда задаёшь вопрос
-— иногда коротко
 """
 
     data = {
@@ -192,7 +191,7 @@ def ask_ai(user_text):
         r = requests.post(url, headers=headers, json=data)
         reply = r.json()["choices"][0]["message"]["content"]
 
-        # 🔥 защита от тупых ответов
+        # 🔥 защита от мусора
         if reply.strip() in ["?", "не знаю", ""]:
             if memory["profile"]["name"]:
                 return memory["profile"]["name"]
