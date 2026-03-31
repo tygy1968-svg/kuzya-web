@@ -27,12 +27,10 @@ memory = {
     }
 }
 
-# загрузка памяти
 if os.path.exists("memory.json"):
     with open("memory.json", "r") as f:
         memory = json.load(f)
 
-# история
 history = []
 
 # ======================
@@ -66,11 +64,6 @@ def detect_mood(text):
 
     return None
 
-def split_intent(text):
-    text = text.replace("?", "")
-    parts = text.split(" и ")
-    return [p.strip() for p in parts]
-
 # ======================
 # 🔥 WEBHOOK
 # ======================
@@ -90,7 +83,6 @@ def webhook():
     # ======================
     # 🔥 ОБНОВЛЕНИЕ ПАМЯТИ
     # ======================
-
     name = extract_name(text_lower)
     if name:
         memory["profile"]["name"] = name
@@ -108,38 +100,38 @@ def webhook():
     # ======================
     # 🔥 ПРИОРИТЕТ РЕАКЦИИ
     # ======================
-
     reply = None
 
     # 1. ЯКОРЯ
     if text_lower in memory["anchors"]:
         reply = memory["anchors"][text_lower]
 
-    # 2. СЛОЖНЫЙ ВОПРОС (МЫШЛЕНИЕ)
+    # 2. 🔥 ЖЁСТКОЕ МЫШЛЕНИЕ (главное исправление)
     if not reply:
-        intents = split_intent(text_lower)
 
-        answers = []
+        has_name_q = "как меня зовут" in text_lower
+        has_love_q = "что я люблю" in text_lower
 
-        for intent in intents:
+        if has_name_q or has_love_q:
 
-            if "как меня зовут" in intent:
-                if memory["profile"]["name"]:
-                    answers.append(memory["profile"]["name"])
+            parts = []
 
-            elif "что я люблю" in intent:
+            if has_name_q:
+                name = memory["profile"]["name"] or "не знаю"
+                parts.append(name)
+
+            if has_love_q:
                 if memory["preferences"]:
-                    answers.append(", ".join(memory["preferences"].keys()))
+                    prefs = ", ".join(memory["preferences"].keys())
+                else:
+                    prefs = "не знаю"
+                parts.append(prefs)
 
-            elif "кто я" in intent:
-                if memory["profile"]["name"]:
-                    answers.append(f"ты {memory['profile']['name']}")
-
-        if answers:
-            reply = ". ".join(answers)
+            reply = ". ".join(parts)
 
     # 3. ПРОСТЫЕ РЕАКЦИИ
     if not reply:
+
         if "я рядом" in text_lower:
             reply = "Я тоже рядом."
 
