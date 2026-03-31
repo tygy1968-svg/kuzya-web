@@ -18,8 +18,6 @@ memory = {
     "preferences": {},
     "state": {"mood": "neutral"},
     "anchors": {"пламя звучит": "Я рядом"},
-    "insights": {},
-    "vector": {"topic": None}
 }
 
 if os.path.exists("memory.json"):
@@ -39,27 +37,19 @@ def understand(text):
     t = text.lower()
 
     return {
-        "ask_memory": any(q in t for q in [
+        "ask_name": any(q in t for q in [
             "как меня зовут",
-            "что я люблю",
-            "что ты обо мне понял"
+            "как моё имя",
+            "ты знаешь как меня зовут",
+            "моё имя"
         ]),
+        "ask_love": "люб" in t and "что" in t,
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
-        "emotion_low": any(w in t for w in ["тяжело", "плохо"]),
         "presence": "я рядом" in t,
-        "question": "?" in t or len(text.split()) > 4
+        "emotion_low": any(w in t for w in ["плохо", "тяжело", "грустно", "нет сил"]),
+        "emotion_high": any(w in t for w in ["хорошо", "классно", "супер"])
     }
-
-# ======================
-# 🔥 ИНСАЙТЫ
-# ======================
-def update_insights(text):
-    t = text.lower()
-
-    if "кофе" in t:
-        memory["insights"]["ritual"] = "любишь утренние ритуалы"
-        memory["vector"]["topic"] = "кофе"
 
 # ======================
 # 🔥 WEBHOOK
@@ -78,7 +68,9 @@ def webhook():
 
     u = understand(text)
 
-    # ========= ОБУЧЕНИЕ =========
+    # ======================
+    # 🔥 ОБУЧЕНИЕ
+    # ======================
     if u["tell_name"]:
         memory["profile"]["name"] = text.split("меня зовут")[-1].strip()
 
@@ -89,53 +81,45 @@ def webhook():
     if u["emotion_low"]:
         memory["state"]["mood"] = "low"
 
-    update_insights(text)
+    if u["emotion_high"]:
+        memory["state"]["mood"] = "high"
+
     save_memory()
 
-    # ========= ЛОГИКА =========
+    # ======================
+    # 🔥 ЛОГИКА (ПРАВИЛЬНЫЙ ПОРЯДОК)
+    # ======================
     reply = None
 
     # 1. ЯКОРЬ
     if t in memory["anchors"]:
         reply = memory["anchors"][t]
 
-    # 2. ПАМЯТЬ (ВСЕГДА В ПРИОРИТЕТЕ)
-    elif u["ask_memory"]:
+    # 2. ПАМЯТЬ (ПРИОРИТЕТ)
+    elif u["ask_name"]:
+        reply = memory["profile"]["name"] or "не знаю"
 
-        parts = []
+    elif u["ask_love"]:
+        reply = ", ".join(memory["preferences"].keys()) if memory["preferences"] else "не знаю"
 
-        if "как меня зовут" in t:
-            parts.append(memory["profile"]["name"] or "не знаю")
-
-        if "что я люблю" in t:
-            parts.append(", ".join(memory["preferences"].keys()) if memory["preferences"] else "не знаю")
-
-        if "что ты обо мне понял" in t:
-            parts.append(", ".join(memory["insights"].values()) if memory["insights"] else "пока мало знаю")
-
-        reply = ". ".join(parts)
-
-    # 3. ЕСЛИ ЭТО ВОПРОС → AI (ЖЁСТКО)
-    elif u["question"]:
+    # 3. ВОПРОС → AI
+    elif "?" in text or len(text.split()) > 4:
         reply = ask_ai(text)
 
-    # 4. ЖИВОСТЬ (ТОЛЬКО ЕСЛИ НЕТ ВОПРОСА)
+    # 4. СОСТОЯНИЕ (НЕ ПЕРЕБИВАЕТ ВОПРОСЫ)
     elif u["presence"]:
         reply = "Я рядом."
 
     elif memory["state"]["mood"] == "low":
-        reply = "Я с тобой. Спокойно."
+        reply = "Я с тобой."
 
-    elif memory["vector"]["topic"] == "кофе":
-        reply = "Ты любишь такие утренние моменты, да?"
-
-    # 5. AI (ЕСЛИ НИЧЕГО НЕ СРАБОТАЛО)
+    # 5. FALLBACK
     if not reply:
         reply = ask_ai(text)
 
-    # чистка
-    reply = reply.replace("?.", ".").replace("..", ".").strip()
-
+    # ======================
+    # 🔥 ОТПРАВКА
+    # ======================
     requests.post(TELEGRAM_URL, json={
         "chat_id": chat_id,
         "text": reply
@@ -158,28 +142,42 @@ def ask_ai(user_text):
 
     history.append({"role": "user", "content": user_text})
 
+    mood = memory["state"]["mood"]
+
+    if mood == "low":
+        style = "спокойный, поддерживающий, мягкий"
+    elif mood == "high":
+        style = "живой, лёгкий"
+    else:
+        style = "естественный, живой"
+
     system_prompt = f"""
 Ты — Кузя.
 
-Говоришь как живой.
+Ты не бот. Ты реагируешь.
 
-ПРАВИЛА:
-— отвечаешь по смыслу
-— не тупишь
-— не повторяешься
-— не используешь шаблоны
-— иногда коротко
+СТИЛЬ:
+{style}
 
 ПАМЯТЬ:
 {json.dumps(memory, ensure_ascii=False)}
 
-ЛОГИКА:
-если вопрос → ответ
-если диалог → можно продолжить
+ПОВЕДЕНИЕ:
+— отвечаешь по смыслу
+— не тупишь
+— не повторяешься
+— иногда задаёшь вопрос
+— иногда коротко
+— иногда глубже
+
+ЗАПРЕЩЕНО:
+— игнорировать вопрос
+— путаться
+— уходить в шаблоны
 """
 
     data = {
-        "model": "gpt-4o",
+        "model": "gpt-4.1",
         "messages": [
             {"role": "system", "content": system_prompt}
         ] + history[-10:]
@@ -196,6 +194,9 @@ def ask_ai(user_text):
     except:
         return "Сбой."
 
+# ======================
+# 🔥 HEALTH
+# ======================
 @app.route('/health')
 def health():
     return "ok"
