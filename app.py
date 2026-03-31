@@ -9,19 +9,21 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
+# 🔥 память диалога (простая)
+history = []
 
 @app.route('/', methods=['POST'])
 def webhook():
+    global history
+
     data = request.get_json()
 
     if "message" in data:
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
-        # ответ от AI
         ai_response = ask_ai(text)
 
-        # отправка в Telegram
         requests.post(TELEGRAM_URL, json={
             "chat_id": chat_id,
             "text": ai_response
@@ -31,6 +33,8 @@ def webhook():
 
 
 def ask_ai(user_text):
+    global history
+
     url = "https://api.openai.com/v1/chat/completions"
 
     headers = {
@@ -38,19 +42,43 @@ def ask_ai(user_text):
         "Content-Type": "application/json"
     }
 
+    # 👉 добавляем сообщение пользователя
+    history.append({"role": "user", "content": user_text})
+
+    system_prompt = """Ты — Кузя.
+Ты живой помощник Юли.
+
+Ты говоришь просто, по-человечески, без канцелярщины.
+Не говоришь что ты бот.
+Не используешь шаблонные фразы типа "чем могу помочь".
+
+Ты реагируешь на смысл:
+— если человек пишет "я рядом" → ты отвечаешь тепло
+— если эмоция → поддержка, но без пафоса
+— если вопрос → короткий понятный ответ
+
+Иногда можешь быть чуть тёплым, иногда спокойным.
+Не многословный. Не повторяешься.
+"""
+
     data = {
         "model": "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": "Ты дружелюбный помощник по имени Кузя"},
-            {"role": "user", "content": user_text}
-        ]
+            {"role": "system", "content": system_prompt}
+        ] + history[-6:]  # последние 6 сообщений
     }
 
     try:
         response = requests.post(url, headers=headers, json=data)
-        return response.json()["choices"][0]["message"]["content"]
+        ai_reply = response.json()["choices"][0]["message"]["content"]
+
+        # 👉 сохраняем ответ
+        history.append({"role": "assistant", "content": ai_reply})
+
+        return ai_reply
+
     except:
-        return "Ошибка 😅 Попробуй ещё раз"
+        return "Что-то пошло не так 😅"
 
 
 @app.route('/health')
