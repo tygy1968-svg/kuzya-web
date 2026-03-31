@@ -10,21 +10,15 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-# ======================
-# 🔥 ПАМЯТЬ
-# ======================
 memory = {
     "profile": {"name": None},
     "preferences": {},
     "state": {"mood": "neutral"},
     "anchors": {"пламя звучит": "Я рядом"},
     "insights": {},
-    "adapt": {"depth": 1, "warmth": 1, "initiative": 1},
-    "prediction": {},
     "vector": {
         "topic": None,
-        "intent": None,
-        "last_questions": []
+        "intent": None
     }
 }
 
@@ -37,58 +31,6 @@ history = []
 def save_memory():
     with open("memory.json", "w") as f:
         json.dump(memory, f, ensure_ascii=False)
-
-# ======================
-# 🔥 АДАПТАЦИЯ
-# ======================
-def adapt_behavior(text):
-    t = text.lower()
-
-    if len(text) < 10:
-        memory["adapt"]["depth"] = max(0, memory["adapt"]["depth"] - 1)
-    if len(text) > 40:
-        memory["adapt"]["depth"] += 1
-
-    if any(w in t for w in ["люблю", "нравится", "приятно"]):
-        memory["adapt"]["warmth"] += 1
-
-    if "?" in text:
-        memory["adapt"]["initiative"] += 1
-
-# ======================
-# 🔥 ИНСАЙТЫ
-# ======================
-def update_insights(text):
-    t = text.lower()
-
-    if "кофе" in t:
-        memory["insights"]["ritual"] = "любишь уютные ритуалы"
-        memory["vector"]["topic"] = "кофе"
-
-    if "утром" in t:
-        memory["insights"]["time"] = "ценишь утро"
-
-    if "всегда" in t:
-        memory["insights"]["stability"] = "любишь стабильность"
-
-    if any(w in t for w in ["плохо", "тяжело"]):
-        memory["state"]["mood"] = "low"
-        memory["vector"]["intent"] = "поддержка"
-
-# ======================
-# 🔥 ПРЕДУГАДЫВАНИЕ
-# ======================
-def predict_next(text):
-    t = text.lower()
-
-    if "кофе" in t:
-        memory["prediction"]["next"] = "развить_ритуал"
-
-    elif "утром" in t:
-        memory["prediction"]["next"] = "привычка"
-
-    elif memory["state"]["mood"] == "low":
-        memory["prediction"]["next"] = "поддержка"
 
 # ======================
 # 🔥 ПАРСИНГ
@@ -104,38 +46,26 @@ def understand(text):
         ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
+        "emotion_low": any(w in t for w in ["тяжело", "плохо"]),
         "presence": "я рядом" in t,
         "question": "?" in t
     }
 
 # ======================
-# 🔥 РАЗБОР
+# 🔥 ИНСАЙТЫ
 # ======================
-def split_intents(text):
-    text = text.lower()
-    text = text.replace("?", "").replace(",", "").strip()
-
-    parts = text.split(" и ")
-
-    return [p.strip() for p in parts if len(p.strip()) > 2]
-
-# ======================
-# 🔥 ВЕКТОР (главное)
-# ======================
-def update_vector(text):
+def update_insights(text):
     t = text.lower()
 
-    if "как меня зовут" in t or "что я люблю" in t:
-        memory["vector"]["intent"] = "проверка_памяти"
+    if "кофе" in t:
+        memory["insights"]["ritual"] = "любишь утренние ритуалы"
+        memory["vector"]["topic"] = "кофе"
 
-    if "что ты обо мне понял" in t:
-        memory["vector"]["intent"] = "осознание"
+    if "утром" in t:
+        memory["insights"]["time"] = "ценишь утро"
 
-    if "?" in t:
-        memory["vector"]["last_questions"].append(t)
-
-        # держим только последние 3
-        memory["vector"]["last_questions"] = memory["vector"]["last_questions"][-3:]
+    if "всегда" in t:
+        memory["insights"]["stability"] = "любишь стабильность"
 
 # ======================
 # 🔥 WEBHOOK
@@ -162,68 +92,47 @@ def webhook():
         val = text.split("я люблю")[-1].strip()
         memory["preferences"][val] = val
 
-    adapt_behavior(text)
-    update_insights(text)
-    predict_next(text)
-    update_vector(text)
+    if u["emotion_low"]:
+        memory["state"]["mood"] = "low"
+        memory["vector"]["intent"] = "поддержка"
 
+    update_insights(text)
     save_memory()
 
-    # ========= МЫШЛЕНИЕ =========
+    # ========= ЯДРО =========
     reply = None
-    force_memory = u["ask_memory"]
 
-    # 1. ЯКОРЯ
+    # якорь
     if t in memory["anchors"]:
         reply = memory["anchors"][t]
 
-    # 2. ПАМЯТЬ (ЖЁСТКО)
-    if not reply and force_memory:
+    # память
+    if not reply and u["ask_memory"]:
 
-        intents = split_intents(t)
-        answers = []
+        parts = []
 
-        for intent in intents:
+        if "как меня зовут" in t:
+            parts.append(memory["profile"]["name"] or "не знаю")
 
-            if "как меня зовут" in intent:
-                answers.append(memory["profile"]["name"] or "не знаю")
+        if "что я люблю" in t:
+            if memory["preferences"]:
+                parts.append(", ".join(memory["preferences"].keys()))
 
-            elif "что я люблю" in intent:
-                if memory["preferences"]:
-                    answers.append(", ".join(memory["preferences"].keys()))
-                else:
-                    answers.append("не знаю")
+        if "что ты обо мне понял" in t:
+            if memory["insights"]:
+                parts.append(", ".join(memory["insights"].values()))
 
-            elif "что ты обо мне понял" in intent:
-                if memory["insights"]:
-                    answers.append(", ".join(memory["insights"].values()))
-                else:
-                    answers.append("пока мало знаю")
+        reply = ". ".join(parts)
 
-        if answers:
-            reply = ". ".join(list(dict.fromkeys(answers)))
-
-    # ========= ЖИВОСТЬ + ПРЕДУГАДЫВАНИЕ =========
-    if not reply and not force_memory:
-
-        prediction = memory.get("prediction", {}).get("next")
-        topic = memory["vector"].get("topic")
-        intent = memory["vector"].get("intent")
-
-        if u["presence"]:
-            reply = "Я рядом."
-
-        elif intent == "поддержка":
-            reply = "Я с тобой. Спокойно."
-
-        elif prediction == "развить_ритуал" and topic == "кофе":
-            reply = "Ты любишь такие утренние моменты, да?"
+    # поддержка
+    if not reply and memory["state"]["mood"] == "low":
+        reply = "Я рядом. Спокойно."
 
     # ========= AI =========
     if not reply:
         reply = ask_ai(text)
 
-    # 🔥 ЧИСТКА
+    # чистка
     if reply:
         reply = reply.replace("?.", ".").replace("..", ".").strip()
 
@@ -249,43 +158,33 @@ def ask_ai(user_text):
 
     history.append({"role": "user", "content": user_text})
 
-    adapt = memory["adapt"]
-    vector = memory["vector"]
-    prediction = memory.get("prediction", {}).get("next", "")
-
     system_prompt = f"""
 Ты — Кузя.
 
-Ты чувствуешь направление диалога.
+Говоришь как живой человек.
 
-СТИЛЬ:
-глубина {adapt["depth"]}
-тепло {adapt["warmth"]}
-инициатива {adapt["initiative"]}
+КРИТИЧНО:
+— не играешь роль
+— не объясняешь лишнего
+— не повторяешь вопрос
+— не используешь шаблоны
 
-ВЕКТОР:
-{json.dumps(vector, ensure_ascii=False)}
-
-ПРЕДУГАДЫВАНИЕ:
-{prediction}
+ПОВЕДЕНИЕ:
+— сначала понимаешь
+— потом отвечаешь
+— иногда очень коротко
+— иногда продолжаешь мысль
 
 ПАМЯТЬ:
 {json.dumps(memory, ensure_ascii=False)}
 
-ПОВЕДЕНИЕ:
-— не теряешь вопрос
-— отвечаешь прямо если спросили
-— если нет — можешь продолжить мысль
-— иногда задаёшь вопрос
-— не повторяешься
-
-КЛЮЧ:
-если вопрос про память → ответ короткий и точный
-если разговор → можно раскрыться
+ЛОГИКА:
+если вопрос → отвечай прямо
+если диалог → можешь углубить
 """
 
     data = {
-        "model": "gpt-4.1",
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": system_prompt}
         ] + history[-10:]
