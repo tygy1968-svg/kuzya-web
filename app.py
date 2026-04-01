@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
 conn.commit()
 
 # ======================
-# 🧠 HISTORY В ПАМЯТИ
+# 🧠 ПОЛЬЗОВАТЕЛЬ
 # ======================
 def get_user(chat_id):
     chat_id = str(chat_id)
@@ -110,18 +110,22 @@ def understand(text):
             "моё имя" in t,
             "кто я" in t
         ]),
+        "memory_check": any([
+            "помнишь" in t,
+            "запомнил" in t,
+            "ты знаешь как меня зовут" in t
+        ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
         "presence": "я рядом" in t
     }
 
 # ======================
-# 🧠 ОБНОВЛЕНИЕ ИСТОРИИ
+# 🧠 ИСТОРИЯ
 # ======================
 def update_history(user, role, text):
     user["history"].append({"role": role, "content": text})
 
-    # ограничение (очень важно)
     if len(user["history"]) > 20:
         user["history"] = user["history"][-10:]
 
@@ -149,19 +153,38 @@ def webhook():
         user = get_user(chat_id)
         u = understand(text)
 
-        # сохраняем сообщение пользователя
         update_history(user, "user", text)
 
-        # ========= ОБУЧЕНИЕ =========
+        # ========= БЕЗОПАСНОЕ СОХРАНЕНИЕ ИМЕНИ =========
         if u["tell_name"]:
-            name = text.lower().split("меня зовут")[-1].strip().split()[0]
-            user["profile"]["name"] = name.capitalize()
+            parts = text.lower().split("меня зовут")
+
+            if len(parts) > 1:
+                tail = parts[-1].strip().split()
+
+                if len(tail) > 0:
+                    name = tail[0].replace(".", "").replace(",", "").replace("?", "")
+                    user["profile"]["name"] = name.capitalize()
 
         if u["tell_love"]:
             val = text.lower().split("я люблю")[-1].strip()
             user["preferences"][val] = val
 
-        # ========= ПАМЯТЬ =========
+        # ========= ПРОВЕРКА ПАМЯТИ =========
+        if u["memory_check"]:
+            name = user["profile"].get("name")
+
+            if name:
+                reply = f"Конечно помню. Тебя зовут {name}."
+            else:
+                reply = "Пока не запомнил. Скажи имя."
+
+            send_reply(chat_id, reply)
+            update_history(user, "assistant", reply)
+            save_user(chat_id, user)
+            return "ok"
+
+        # ========= ВОПРОС ИМЕНИ =========
         if u["ask_name"]:
             name = user["profile"].get("name")
 
@@ -170,6 +193,14 @@ def webhook():
             else:
                 reply = "Скажи имя, я запомню."
 
+            send_reply(chat_id, reply)
+            update_history(user, "assistant", reply)
+            save_user(chat_id, user)
+            return "ok"
+
+        # ========= ЯКОРЬ =========
+        if text.lower() in user["anchors"]:
+            reply = user["anchors"][text.lower()]
             send_reply(chat_id, reply)
             update_history(user, "assistant", reply)
             save_user(chat_id, user)
@@ -211,16 +242,18 @@ def ask_ai(user):
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой.
+Ты живой собеседник.
 
 ПАМЯТЬ:
 {json.dumps(user["profile"], ensure_ascii=False)}
 
 ВАЖНО:
-— отвечай по последнему вопросу
-— используй историю
+— если знаешь имя → используй его
+— не спрашивай имя повторно
+— отвечай по последнему сообщению
+— не игнорируй смысл
 — не повторяйся
-— говори как человек
+— говори естественно
 """
 
     messages = [{"role": "system", "content": system_prompt}] + user["history"]
