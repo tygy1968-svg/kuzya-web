@@ -11,7 +11,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
 # ======================
-# 🔥 ПАМЯТЬ (ПО ПОЛЬЗОВАТЕЛЮ)
+# 🔥 ПАМЯТЬ
 # ======================
 memory = {}
 
@@ -62,7 +62,7 @@ def web_search(query):
         return ""
 
 # ======================
-# 🧠 СЖАТИЕ ИСТОРИИ
+# 🧠 ИСТОРИЯ
 # ======================
 def compress_history(h):
     if len(h) > 30:
@@ -76,11 +76,6 @@ def understand(text):
     t = text.lower()
 
     return {
-        "ask_name": any([
-            "как" in t and "зовут" in t,
-            "как" in t and "звать" in t,
-            "моё имя" in t
-        ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
         "presence": "я рядом" in t,
@@ -116,6 +111,7 @@ def webhook():
             name = name.replace(".", "").replace(",", "").replace("?", "")
             user["profile"]["name"] = name.capitalize()
 
+    # если просто "Юля"
     if len(text.split()) == 1 and len(text) < 20 and text.isalpha():
         user["profile"]["name"] = text.capitalize()
 
@@ -132,34 +128,37 @@ def webhook():
     save_memory()
     h = compress_history(h)
 
-    # ========= ЛОГИКА =========
-    reply = None
-
-    if t in user["anchors"]:
-        reply = user["anchors"][t]
-
-    elif u["ask_name"]:
+    # ======================
+    # 🔥 ГЛАВНЫЙ ФИКС ПАМЯТИ
+    # ======================
+    if "как меня зовут" in t or ("зовут" in t and "меня" in t):
         name = user["profile"].get("name")
         if name:
             reply = f"Тебя зовут {name}."
         else:
             reply = "Скажи мне своё имя, я запомню."
 
-    elif u["search"]:
-        result = web_search(text)
-        if result:
-            reply = result
-        else:
+    else:
+        reply = None
+
+        if t in user["anchors"]:
+            reply = user["anchors"][t]
+
+        elif u["search"]:
+            result = web_search(text)
+            if result:
+                reply = result
+            else:
+                reply = ask_ai(text, user, h)
+
+        elif u["presence"]:
+            reply = "Я рядом."
+
+        elif user["state"]["mood"] == "low":
+            reply = "Я с тобой."
+
+        if not reply:
             reply = ask_ai(text, user, h)
-
-    elif u["presence"]:
-        reply = "Я рядом."
-
-    elif user["state"]["mood"] == "low":
-        reply = "Я с тобой."
-
-    if not reply:
-        reply = ask_ai(text, user, h)
 
     requests.post(TELEGRAM_URL, json={
         "chat_id": chat_id,
@@ -169,7 +168,7 @@ def webhook():
     return "ok"
 
 # ======================
-# 🔥 AI (АГЕНТ)
+# 🔥 AI
 # ======================
 def ask_ai(user_text, user, h):
 
@@ -185,28 +184,15 @@ def ask_ai(user_text, user, h):
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой собеседник и помощник.
+Ты живой собеседник.
 
 ПАМЯТЬ:
 {json.dumps(user, ensure_ascii=False)}
 
-РЕЖИМ: АГЕНТ
-
-ТВОЯ РОЛЬ:
-— не просто отвечать
-— помогать думать
-— вести диалог
-
 ПРАВИЛА:
-1. Если вопрос неполный → уточни
-2. Если можно помочь → предложи варианты
-3. Если человек говорит → поддержи и развей мысль
-4. Продолжай разговор, если это уместно
-
-ВАЖНО:
-— если знаешь имя → используй
+— если знаешь имя → используй его
 — не теряй память
-— не говори "не знаю", если знаешь
+— не отвечай "не знаю", если знаешь
 
 СТИЛЬ:
 — живой
@@ -231,7 +217,7 @@ def ask_ai(user_text, user, h):
         response_json = r.json()
 
         if "choices" not in response_json:
-            return f"Ошибка формата: {response_json}"
+            return f"Ошибка: {response_json}"
 
         reply = response_json["choices"][0]["message"]["content"]
 
