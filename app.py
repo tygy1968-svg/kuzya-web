@@ -189,7 +189,14 @@ def webhook():
                     save_user(chat_id, user)
 
         # 🔥 ЕСЛИ СПРАШИВАЕТ ИМЯ
-        if "зовут" in text.lower() and "меня" in text.lower():
+        t = text.lower().strip()
+
+if (
+    "как меня зовут" in t
+    or "напомни имя" in t
+    or "моё имя" in t
+    or ("зовут" in t and "меня" in t)
+):
             name = user["profile"].get("name")
 
             if name:
