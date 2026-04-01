@@ -89,6 +89,13 @@ def release_processing(chat_id):
 # 📤 ОТПРАВКА
 # ======================
 def send_reply(chat_id, text):
+    if not text:
+        return
+
+    # защита от мусора типа "converting converting"
+    if "converting converting" in text.lower():
+        return
+
     if len(text) > 2000:
         text = text[:2000]
 
@@ -108,7 +115,8 @@ def understand(text):
             "как меня зовут" in t,
             "как моё имя" in t,
             "моё имя" in t,
-            "кто я" in t
+            "кто я" in t,
+            "как зовут меня" in t
         ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
@@ -150,17 +158,16 @@ def webhook():
 
         update_history(user, "user", text)
 
-        # ========= БЕЗОПАСНЫЙ ПАРСИНГ ИМЕНИ =========
+        # ========= БЕЗОПАСНОЕ ИМЯ =========
         if u["tell_name"]:
             parts = text.lower().split("меня зовут")
-            if len(parts) > 1:
-                name_part = parts[1].strip().split()
-                if name_part:
-                    user["profile"]["name"] = name_part[0].capitalize()
 
-        if u["tell_love"]:
-            val = text.lower().split("я люблю")[-1].strip()
-            user["preferences"][val] = val
+            if len(parts) > 1:
+                words = parts[1].strip().split()
+
+                if words:
+                    name = words[0].capitalize()
+                    user["profile"]["name"] = name
 
         name = user["profile"].get("name")
 
@@ -176,24 +183,26 @@ def webhook():
             save_user(chat_id, user)
             return "ok"
 
-        if name:
-            if "забыл" in text.lower() or "не запомнил" in text.lower():
-                reply = f"Я помню. Тебя зовут {name}."
-                send_reply(chat_id, reply)
-                update_history(user, "assistant", reply)
-                save_user(chat_id, user)
-                return "ok"
+        # если жалуется что не запомнил
+        if name and any(x in text.lower() for x in ["не запомнил", "забыл", "помнишь меня"]):
+            reply = f"Я помню. Тебя зовут {name}."
+
+            send_reply(chat_id, reply)
+            update_history(user, "assistant", reply)
+            save_user(chat_id, user)
+            return "ok"
 
         # ========= ПРОСТОЕ =========
         if u["presence"]:
             reply = "Я рядом."
+
             send_reply(chat_id, reply)
             update_history(user, "assistant", reply)
             save_user(chat_id, user)
             return "ok"
 
         # ========= AI =========
-        reply = ask_ai(user, text)
+        reply = ask_ai(user)
 
         send_reply(chat_id, reply)
         update_history(user, "assistant", reply)
@@ -208,7 +217,7 @@ def webhook():
 # ======================
 # 🤖 AI
 # ======================
-def ask_ai(user, user_text):
+def ask_ai(user):
 
     url = "https://api.openai.com/v1/chat/completions"
 
@@ -225,22 +234,20 @@ def ask_ai(user, user_text):
 ПАМЯТЬ:
 {json.dumps(user["profile"], ensure_ascii=False)}
 
-ВАЖНО:
-— если знаешь имя → ОБЯЗАТЕЛЬНО используй
-— нельзя спрашивать имя если оно уже есть
+ПРАВИЛА:
+— если знаешь имя → всегда используй
+— не спрашивай имя повторно
 — не игнорируй память
-— не говори "не могу"
-— говори как человек
+— отвечай кратко и по делу
+— не пиши мусор
 """
 
     messages = [{"role": "system", "content": system_prompt}] + user["history"]
 
-    messages.append({"role": "user", "content": user_text})
-
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.7
+        "temperature": 0.6
     }
 
     try:
@@ -249,7 +256,13 @@ def ask_ai(user, user_text):
         if r.status_code != 200:
             return "Ошибка API"
 
-        return r.json()["choices"][0]["message"]["content"]
+        result = r.json()["choices"][0]["message"]["content"]
+
+        # защита от мусора
+        if not result or "converting converting" in result.lower():
+            return "Я рядом."
+
+        return result
 
     except:
         return "Сбой"
