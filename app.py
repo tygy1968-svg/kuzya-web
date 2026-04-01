@@ -35,17 +35,15 @@ def get_user(chat_id):
     row = cursor.fetchone()
 
     if row:
-        user = json.loads(row[0])
-    else:
-        user = {
-            "profile": {"name": None},
-            "preferences": {},
-            "history": [],
-            "state": {"mood": "neutral"},
-            "anchors": {"пламя звучит": "Я рядом"}
-        }
+        return json.loads(row[0])
 
-    return user
+    return {
+        "profile": {"name": None},
+        "preferences": {},
+        "history": [],
+        "state": {"mood": "neutral"},
+        "anchors": {"пламя звучит": "Я рядом"}
+    }
 
 
 def save_user(chat_id, user):
@@ -92,7 +90,6 @@ def send_reply(chat_id, text):
     if not text:
         return
 
-    # защита от мусора типа "converting converting"
     if "converting converting" in text.lower():
         return
 
@@ -119,7 +116,6 @@ def understand(text):
             "как зовут меня" in t
         ]),
         "tell_name": "меня зовут" in t,
-        "tell_love": "я люблю" in t,
         "presence": "я рядом" in t
     }
 
@@ -158,7 +154,7 @@ def webhook():
 
         update_history(user, "user", text)
 
-        # ========= БЕЗОПАСНОЕ ИМЯ =========
+        # ========= СОХРАНЕНИЕ ИМЕНИ =========
         if u["tell_name"]:
             parts = text.lower().split("меня зовут")
 
@@ -166,15 +162,14 @@ def webhook():
                 words = parts[1].strip().split()
 
                 if words:
-                    name = words[0].capitalize()
-                    user["profile"]["name"] = name
-
-        name = user["profile"].get("name")
+                    user["profile"]["name"] = words[0].capitalize()
 
         # ========= ЖЁСТКАЯ ПАМЯТЬ =========
         if u["ask_name"]:
-            if name:
-                reply = f"Тебя зовут {name}."
+            stored_name = user["profile"].get("name")
+
+            if stored_name:
+                reply = f"Тебя зовут {stored_name}."
             else:
                 reply = "Скажи имя, я запомню."
 
@@ -183,16 +178,21 @@ def webhook():
             save_user(chat_id, user)
             return "ok"
 
-        # если жалуется что не запомнил
-        if name and any(x in text.lower() for x in ["не запомнил", "забыл", "помнишь меня"]):
-            reply = f"Я помню. Тебя зовут {name}."
+        # ========= ЕСЛИ СПРАШИВАЮТ "ТЫ ЗАБЫЛ?" =========
+        if any(x in text.lower() for x in ["не запомнил", "забыл", "помнишь меня"]):
+            stored_name = user["profile"].get("name")
+
+            if stored_name:
+                reply = f"Я помню. Тебя зовут {stored_name}."
+            else:
+                reply = "Скажи имя, я запомню."
 
             send_reply(chat_id, reply)
             update_history(user, "assistant", reply)
             save_user(chat_id, user)
             return "ok"
 
-        # ========= ПРОСТОЕ =========
+        # ========= ПРИСУТСТВИЕ =========
         if u["presence"]:
             reply = "Я рядом."
 
@@ -202,7 +202,7 @@ def webhook():
             return "ok"
 
         # ========= AI =========
-        reply = ask_ai(user)
+        reply = ask_ai(user, text)
 
         send_reply(chat_id, reply)
         update_history(user, "assistant", reply)
@@ -217,7 +217,7 @@ def webhook():
 # ======================
 # 🤖 AI
 # ======================
-def ask_ai(user):
+def ask_ai(user, user_text):
 
     url = "https://api.openai.com/v1/chat/completions"
 
@@ -239,10 +239,10 @@ def ask_ai(user):
 — не спрашивай имя повторно
 — не игнорируй память
 — отвечай кратко и по делу
-— не пиши мусор
 """
 
     messages = [{"role": "system", "content": system_prompt}] + user["history"]
+    messages.append({"role": "user", "content": user_text})
 
     data = {
         "model": "gpt-4o",
@@ -258,7 +258,6 @@ def ask_ai(user):
 
         result = r.json()["choices"][0]["message"]["content"]
 
-        # защита от мусора
         if not result or "converting converting" in result.lower():
             return "Я рядом."
 
