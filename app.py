@@ -18,6 +18,7 @@ memory = {
     "preferences": {},
     "state": {"mood": "neutral"},
     "anchors": {"пламя звучит": "Я рядом"},
+    "notes": []
 }
 
 if os.path.exists("memory.json"):
@@ -31,6 +32,27 @@ def save_memory():
         json.dump(memory, f, ensure_ascii=False)
 
 # ======================
+# 🌐 ПОИСК (ИНТЕРНЕТ)
+# ======================
+def web_search(query):
+    try:
+        url = "https://api.duckduckgo.com/"
+        params = {"q": query, "format": "json"}
+        r = requests.get(url, params=params)
+        data = r.json()
+        return data.get("AbstractText", "")
+    except:
+        return ""
+
+# ======================
+# 🧠 СЖАТИЕ ИСТОРИИ
+# ======================
+def compress_history():
+    global history
+    if len(history) > 30:
+        history = history[-15:]
+
+# ======================
 # 🔥 ПАРСИНГ
 # ======================
 def understand(text):
@@ -39,8 +61,6 @@ def understand(text):
     return {
         "ask_name": any(q in t for q in [
             "как меня зовут",
-            "как моё имя",
-            "ты знаешь как меня зовут",
             "моё имя",
             "как меня звать"
         ]),
@@ -51,8 +71,9 @@ def understand(text):
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
         "presence": "я рядом" in t,
-        "emotion_low": any(w in t for w in ["плохо", "тяжело", "грустно", "нет сил"]),
-        "emotion_high": any(w in t for w in ["хорошо", "классно", "супер"])
+        "search": any(w in t for w in ["найди", "поиск", "что такое", "кто такой"]),
+        "emotion_low": any(w in t for w in ["плохо", "тяжело", "грустно"]),
+        "emotion_high": any(w in t for w in ["хорошо", "классно"])
     }
 
 # ======================
@@ -72,15 +93,14 @@ def webhook():
 
     u = understand(text)
 
-    # ======================
-    # 🔥 ОБУЧЕНИЕ
-    # ======================
+    # ========= ОБУЧЕНИЕ =========
     if u["tell_name"]:
-        memory["profile"]["name"] = text.split("меня зовут")[-1].strip()
+        name = text.lower().split("меня зовут")[-1].strip()
+        memory["profile"]["name"] = name.capitalize()
 
     if u["tell_love"]:
-        val = text.split("я люблю")[-1].strip()
-        memory["preferences"]["likes"] = val
+        val = text.lower().split("я люблю")[-1].strip()
+        memory["preferences"][val] = val
 
     if u["emotion_low"]:
         memory["state"]["mood"] = "low"
@@ -89,28 +109,35 @@ def webhook():
         memory["state"]["mood"] = "high"
 
     save_memory()
+    compress_history()
 
-    # ======================
-    # 🔥 ЛОГИКА (ФИКС)
-    # ======================
+    # ========= ЛОГИКА =========
     reply = None
 
     # 1. ЯКОРЬ
     if t in memory["anchors"]:
         reply = memory["anchors"][t]
 
-    # 2. КОМБО ВОПРОС
-    elif u["ask_name"] and u["ask_love"]:
-        name = memory["profile"]["name"] or "ты ещё не говорила"
-        love = memory["preferences"].get("likes", "ты ещё не говорила")
-        reply = f"{name}. {love}"
-
-    # 3. ПАМЯТЬ — ПРИОРИТЕТ
+    # 2. ПАМЯТЬ (САМЫЙ ВАЖНЫЙ ПРИОРИТЕТ)
     elif u["ask_name"]:
-        reply = memory["profile"]["name"] or "ты ещё не говорила"
+        if memory["profile"]["name"]:
+            reply = f"Тебя зовут {memory['profile']['name']}."
+        else:
+            reply = "Пока не знаю, скажи мне."
 
     elif u["ask_love"]:
-        reply = memory["preferences"].get("likes", "ты ещё не говорила")
+        if memory["preferences"]:
+            reply = ", ".join(memory["preferences"].keys())
+        else:
+            reply = "Пока не знаю"
+
+    # 3. ИНТЕРНЕТ
+    elif u["search"]:
+        result = web_search(text)
+        if result:
+            reply = result
+        else:
+            reply = ask_ai(text)
 
     # 4. СОСТОЯНИЕ
     elif u["presence"]:
@@ -119,13 +146,11 @@ def webhook():
     elif memory["state"]["mood"] == "low":
         reply = "Я с тобой."
 
-    # 5. ВСЁ ОСТАЛЬНОЕ → AI
+    # 5. AI (ТОЛЬКО ЕСЛИ НИЧЕГО НЕ СРАБОТАЛО)
     if not reply:
         reply = ask_ai(text)
 
-    # ======================
-    # 🔥 ОТПРАВКА
-    # ======================
+    # ========= ОТПРАВКА =========
     requests.post(TELEGRAM_URL, json={
         "chat_id": chat_id,
         "text": reply
@@ -148,35 +173,23 @@ def ask_ai(user_text):
 
     history.append({"role": "user", "content": user_text})
 
-    mood = memory["state"]["mood"]
-
-    if mood == "low":
-        style = "спокойный, мягкий, поддерживающий"
-    elif mood == "high":
-        style = "живой, лёгкий"
-    else:
-        style = "естественный, живой"
-
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой и последовательный.
+Ты живой собеседник.
 
 ПАМЯТЬ:
 {json.dumps(memory, ensure_ascii=False)}
 
 ВАЖНО:
-— если знаешь имя → используешь его
-— если знаешь предпочтения → используешь их
-— не говоришь "не знаю", если данные есть
+— если знаешь имя пользователя → используй его
+— не теряй память
+— не отвечай "?" или "не знаю", если знаешь
+— отвечай естественно
 
 СТИЛЬ:
-{style}
-
-ПОВЕДЕНИЕ:
-— отвечаешь по смыслу
-— не тупишь
-— не повторяешься
+— живой
+— спокойный
 — иногда задаёшь вопрос
 """
 
@@ -184,17 +197,17 @@ def ask_ai(user_text):
         "model": "gpt-4.1",
         "messages": [
             {"role": "system", "content": system_prompt}
-        ] + history[-10:]
+        ] + history[-15:]
     }
 
     try:
         r = requests.post(url, headers=headers, json=data)
         reply = r.json()["choices"][0]["message"]["content"]
 
-        # 🔥 защита от мусора
+        # защита от тупых ответов
         if reply.strip() in ["?", "не знаю", ""]:
             if memory["profile"]["name"]:
-                return memory["profile"]["name"]
+                return f"Тебя зовут {memory['profile']['name']}."
 
         history.append({"role": "assistant", "content": reply})
 
