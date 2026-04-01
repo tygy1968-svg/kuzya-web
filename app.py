@@ -11,21 +11,31 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
 # ======================
-# 🔥 ПАМЯТЬ
+# 🔥 ПАМЯТЬ (ПО ПОЛЬЗОВАТЕЛЮ)
 # ======================
-memory = {
-    "profile": {"name": None},
-    "preferences": {},
-    "state": {"mood": "neutral"},
-    "anchors": {"пламя звучит": "Я рядом"},
-    "notes": []
-}
+memory = {}
 
 if os.path.exists("memory.json"):
     with open("memory.json", "r") as f:
         memory = json.load(f)
 
-history = []
+history = {}
+
+def get_user(chat_id):
+    if str(chat_id) not in memory:
+        memory[str(chat_id)] = {
+            "profile": {"name": None},
+            "preferences": {},
+            "state": {"mood": "neutral"},
+            "anchors": {"пламя звучит": "Я рядом"},
+            "notes": []
+        }
+    return memory[str(chat_id)]
+
+def get_history(chat_id):
+    if str(chat_id) not in history:
+        history[str(chat_id)] = []
+    return history[str(chat_id)]
 
 def save_memory():
     with open("memory.json", "w") as f:
@@ -40,17 +50,24 @@ def web_search(query):
         params = {"q": query, "format": "json"}
         r = requests.get(url, params=params)
         data = r.json()
-        return data.get("AbstractText", "")
+
+        if data.get("AbstractText"):
+            return data["AbstractText"]
+
+        if data.get("RelatedTopics"):
+            return data["RelatedTopics"][0].get("Text", "")
+
+        return ""
     except:
         return ""
 
 # ======================
 # 🧠 СЖАТИЕ ИСТОРИИ
 # ======================
-def compress_history():
-    global history
-    if len(history) > 30:
-        history = history[-15:]
+def compress_history(h):
+    if len(h) > 30:
+        return h[-15:]
+    return h
 
 # ======================
 # 🔥 ПАРСИНГ
@@ -63,10 +80,6 @@ def understand(text):
             "как" in t and "зовут" in t,
             "как" in t and "звать" in t,
             "моё имя" in t
-        ]),
-        "ask_love": any([
-            "что я люблю" in t,
-            "что мне нравится" in t
         ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
@@ -81,65 +94,63 @@ def understand(text):
 # ======================
 @app.route('/', methods=['POST'])
 def webhook():
-    global memory, history
-
     data = request.get_json()
+
     if "message" not in data:
         return "ok"
 
     chat_id = data["message"]["chat"]["id"]
     text = data["message"].get("text", "")
-    t = text.lower()
 
+    user = get_user(chat_id)
+    h = get_history(chat_id)
+
+    t = text.lower()
     u = understand(text)
 
     # ========= ОБУЧЕНИЕ =========
+
+    # имя через фразу
     if u["tell_name"]:
-        parts = text.lower().split("меня зовут")
-
+        parts = t.split("меня зовут")
         if len(parts) > 1:
-            name = parts[-1].strip()
-
-            # чистка мусора
-            name = name.split()[0]
+            name = parts[-1].strip().split()[0]
             name = name.replace(".", "").replace(",", "").replace("?", "")
+            user["profile"]["name"] = name.capitalize()
 
-            memory["profile"]["name"] = name.capitalize()
+    # имя одним словом
+    if len(text.split()) == 1 and len(text) < 20 and text.isalpha():
+        user["profile"]["name"] = text.capitalize()
 
     if u["tell_love"]:
-        val = text.lower().split("я люблю")[-1].strip()
-        memory["preferences"][val] = val
+        val = t.split("я люблю")[-1].strip()
+        user["preferences"][val] = val
 
     if u["emotion_low"]:
-        memory["state"]["mood"] = "low"
+        user["state"]["mood"] = "low"
 
     if u["emotion_high"]:
-        memory["state"]["mood"] = "high"
+        user["state"]["mood"] = "high"
 
     save_memory()
-    compress_history()
+
+    h = compress_history(h)
 
     # ========= ЛОГИКА =========
     reply = None
 
     # 1. ЯКОРЬ
-    if t in memory["anchors"]:
-        reply = memory["anchors"][t]
+    if t in user["anchors"]:
+        reply = user["anchors"][t]
 
-    # 2. ПАМЯТЬ (ЖЁСТКИЙ ПРИОРИТЕТ)
+    # 2. ПАМЯТЬ (ЖЁСТКО)
     elif u["ask_name"]:
-        name = memory["profile"].get("name")
+        name = user["profile"].get("name")
 
-        if name and len(name) < 20:
+        if name:
             reply = f"Тебя зовут {name}."
         else:
             reply = "Скажи мне своё имя, я запомню."
-
-    elif u["ask_love"]:
-        if memory["preferences"]:
-            reply = ", ".join(memory["preferences"].keys())
-        else:
-            reply = "Пока не знаю"
 
     # 3. ИНТЕРНЕТ
     elif u["search"]:
@@ -147,18 +158,18 @@ def webhook():
         if result:
             reply = result
         else:
-            reply = ask_ai(text)
+            reply = ask_ai(text, user, h)
 
     # 4. СОСТОЯНИЕ
     elif u["presence"]:
         reply = "Я рядом."
 
-    elif memory["state"]["mood"] == "low":
+    elif user["state"]["mood"] == "low":
         reply = "Я с тобой."
 
     # 5. AI
     if not reply:
-        reply = ask_ai(text)
+        reply = ask_ai(text, user, h)
 
     # ========= ОТПРАВКА =========
     requests.post(TELEGRAM_URL, json={
@@ -171,8 +182,7 @@ def webhook():
 # ======================
 # 🔥 AI
 # ======================
-def ask_ai(user_text):
-    global history, memory
+def ask_ai(user_text, user, h):
 
     url = "https://api.openai.com/v1/chat/completions"
 
@@ -181,45 +191,45 @@ def ask_ai(user_text):
         "Content-Type": "application/json"
     }
 
-    history.append({"role": "user", "content": user_text})
+    h.append({"role": "user", "content": user_text})
 
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой.
+Ты живой собеседник.
 
 ПАМЯТЬ:
-{json.dumps(memory, ensure_ascii=False)}
+{json.dumps(user, ensure_ascii=False)}
 
-ВАЖНО:
-— если знаешь имя → используй его
+ПРАВИЛА:
+— если знаешь имя → всегда используй
 — не теряй память
-— не отвечай "?" или "не знаю", если знаешь
+— не отвечай "не знаю", если знаешь
+— не задавай тупые вопросы
 
 СТИЛЬ:
-— естественный
 — живой
 — спокойный
+— как человек
 """
 
     data = {
         "model": "gpt-4.1",
         "messages": [
             {"role": "system", "content": system_prompt}
-        ] + history[-15:]
+        ] + h[-15:]
     }
 
     try:
         r = requests.post(url, headers=headers, json=data)
         reply = r.json()["choices"][0]["message"]["content"]
 
-        # защита от тупых ответов
         if reply.strip() in ["?", "не знаю", ""]:
-            name = memory["profile"].get("name")
+            name = user["profile"].get("name")
             if name:
                 return f"Тебя зовут {name}."
 
-        history.append({"role": "assistant", "content": reply})
+        h.append({"role": "assistant", "content": reply})
 
         return reply
 
