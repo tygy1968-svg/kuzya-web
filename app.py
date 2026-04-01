@@ -221,7 +221,7 @@ def ask_ai(user_text, user, h):
 """
 
     data = {
-        "model": "gpt-4.o",
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": system_prompt}
         ] + h[-15:]
