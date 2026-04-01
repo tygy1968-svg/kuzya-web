@@ -21,12 +21,12 @@ if os.path.exists("memory.json"):
 
 history = {}
 
-# ======================
-# 🔥 АНТИ-ДУБЛИ И БЛОКИРОВКА
-# ======================
 last_messages = {}
 processing_lock = {}
 
+# ======================
+# 🔥 ЗАЩИТА
+# ======================
 def is_duplicate(chat_id, message_id):
     chat_id = str(chat_id)
 
@@ -107,6 +107,18 @@ def compress_history(h):
     return h
 
 # ======================
+# 📤 ОТПРАВКА
+# ======================
+def send_reply(chat_id, text):
+    if len(text) > 2000:
+        text = text[:2000]
+
+    requests.post(TELEGRAM_URL, json={
+        "chat_id": chat_id,
+        "text": text
+    })
+
+# ======================
 # 🔥 ПАРСИНГ
 # ======================
 def understand(text):
@@ -114,9 +126,11 @@ def understand(text):
 
     return {
         "ask_name": any([
-            "как" in t and "зовут" in t,
-            "как" in t and "звать" in t,
-            "моё имя" in t
+            "как меня зовут" in t,
+            "как моё имя" in t,
+            "моё имя" in t,
+            "как меня звать" in t,
+            "кто я" in t
         ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
@@ -140,11 +154,9 @@ def webhook():
     message_id = data["message"]["message_id"]
     text = data["message"].get("text", "")
 
-    # анти-дубль
     if is_duplicate(chat_id, message_id):
         return "ok"
 
-    # анти-параллель
     if is_processing(chat_id):
         return "ok"
 
@@ -179,25 +191,26 @@ def webhook():
         save_memory()
         h = compress_history(h)
 
+        # ========= ЖЁСТКИЙ ПРИОРИТЕТ ПАМЯТИ =========
+        if u["ask_name"]:
+            name = user["profile"].get("name")
+
+            if name:
+                send_reply(chat_id, f"Тебя зовут {name}.")
+            else:
+                send_reply(chat_id, "Скажи мне своё имя, я запомню.")
+
+            return "ok"
+
         # ========= ЛОГИКА =========
         reply = None
 
         if t in user["anchors"]:
             reply = user["anchors"][t]
 
-        elif u["ask_name"]:
-            name = user["profile"].get("name")
-            if name:
-                reply = f"Тебя зовут {name}."
-            else:
-                reply = "Скажи мне своё имя, я запомню."
-
         elif u["search"]:
             result = web_search(text)
-            if result:
-                reply = result
-            else:
-                reply = ask_ai(text, user, h)
+            reply = result if result else ask_ai(text, user, h)
 
         elif u["presence"]:
             reply = "Я рядом."
@@ -208,14 +221,7 @@ def webhook():
         if not reply:
             reply = ask_ai(text, user, h)
 
-        # защита от длинных сообщений
-        if len(reply) > 2000:
-            reply = reply[:2000]
-
-        requests.post(TELEGRAM_URL, json={
-            "chat_id": chat_id,
-            "text": reply
-        })
+        send_reply(chat_id, reply)
 
     finally:
         release_processing(chat_id)
@@ -247,22 +253,16 @@ def ask_ai(user_text, user, h):
 ПАМЯТЬ:
 {json.dumps(user, ensure_ascii=False)}
 
-РЕЖИМ: АГЕНТ
-
-ТЫ НЕ ДОЛЖЕН:
-— зацикливаться
-— повторять один и тот же ответ
-— игнорировать вопрос
-
-ТЫ ДОЛЖЕН:
-— отвечать по смыслу последнего сообщения
-— учитывать память
-— быть живым
+ВАЖНО:
+— не зацикливайся
+— не повторяй одно и то же
+— отвечай по последнему вопросу
+— если знаешь имя → используй
 
 СТИЛЬ:
+— живой
 — спокойный
 — естественный
-— краткий если не нужно длинно
 """
 
     data = {
@@ -277,12 +277,9 @@ def ask_ai(user_text, user, h):
         r = requests.post(url, headers=headers, json=data)
 
         if r.status_code != 200:
-            return f"Ошибка API: {r.text}"
+            return "Ошибка API"
 
         response_json = r.json()
-
-        if "choices" not in response_json:
-            return f"Ошибка формата: {response_json}"
 
         reply = response_json["choices"][0]["message"]["content"]
 
@@ -290,8 +287,8 @@ def ask_ai(user_text, user, h):
 
         return reply
 
-    except Exception as e:
-        return f"Сбой: {str(e)}"
+    except:
+        return "Сбой."
 
 # ======================
 # 🔥 HEALTH
@@ -301,4 +298,3 @@ def health():
     return "ok"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
