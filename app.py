@@ -161,12 +161,14 @@ def webhook():
             if len(parts) > 1:
                 words = parts[1].strip().split()
 
-                if words:
+                if words and words[0].isalpha():
                     user["profile"]["name"] = words[0].capitalize()
+                    save_user(chat_id, user)  # 🔥 сохраняем сразу
 
         # ========= ЖЁСТКАЯ ПАМЯТЬ =========
         if u["ask_name"]:
-            stored_name = user["profile"].get("name")
+            user = get_user(chat_id)  # 🔥 перечитываем из базы
+            stored_name = user.get("profile", {}).get("name")
 
             if stored_name:
                 reply = f"Тебя зовут {stored_name}."
@@ -180,7 +182,8 @@ def webhook():
 
         # ========= ЕСЛИ СПРАШИВАЮТ "ТЫ ЗАБЫЛ?" =========
         if any(x in text.lower() for x in ["не запомнил", "забыл", "помнишь меня"]):
-            stored_name = user["profile"].get("name")
+            user = get_user(chat_id)
+            stored_name = user.get("profile", {}).get("name")
 
             if stored_name:
                 reply = f"Я помню. Тебя зовут {stored_name}."
