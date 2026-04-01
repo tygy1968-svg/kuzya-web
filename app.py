@@ -62,24 +62,22 @@ def web_search(query):
         return ""
 
 # ======================
-# 🧠 ИСТОРИЯ
-# ======================
-def compress_history(h):
-    if len(h) > 30:
-        return h[-15:]
-    return h
-
-# ======================
 # 🔥 ПАРСИНГ
 # ======================
 def understand(text):
     t = text.lower()
 
     return {
+        "ask_name": any([
+            "как меня зовут" in t,
+            "как меня звать" in t,
+            "моё имя" in t,
+            "кто я" in t
+        ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
         "presence": "я рядом" in t,
-        "search": any(w in t for w in ["найди", "поиск", "что такое", "кто такой"]),
+        "search": any(w in t for w in ["найди", "поиск", "что такое"]),  # убрали "кто такой"
         "emotion_low": any(w in t for w in ["плохо", "тяжело", "грустно"]),
         "emotion_high": any(w in t for w in ["хорошо", "классно"])
     }
@@ -111,7 +109,7 @@ def webhook():
             name = name.replace(".", "").replace(",", "").replace("?", "")
             user["profile"]["name"] = name.capitalize()
 
-    # если просто "Юля"
+    # имя одним словом
     if len(text.split()) == 1 and len(text) < 20 and text.isalpha():
         user["profile"]["name"] = text.capitalize()
 
@@ -126,40 +124,38 @@ def webhook():
         user["state"]["mood"] = "high"
 
     save_memory()
-    h = compress_history(h)
 
-    # ======================
-    # 🔥 ГЛАВНЫЙ ФИКС ПАМЯТИ
-    # ======================
-    if "как меня зовут" in t or ("зовут" in t and "меня" in t):
+    # ========= ЛОГИКА =========
+    reply = None
+
+    # 💥 ЖЁСТКИЙ ПЕРЕХВАТ ИМЕНИ
+    if u["ask_name"]:
         name = user["profile"].get("name")
         if name:
             reply = f"Тебя зовут {name}."
         else:
             reply = "Скажи мне своё имя, я запомню."
 
-    else:
-        reply = None
+    elif t in user["anchors"]:
+        reply = user["anchors"][t]
 
-        if t in user["anchors"]:
-            reply = user["anchors"][t]
-
-        elif u["search"]:
-            result = web_search(text)
-            if result:
-                reply = result
-            else:
-                reply = ask_ai(text, user, h)
-
-        elif u["presence"]:
-            reply = "Я рядом."
-
-        elif user["state"]["mood"] == "low":
-            reply = "Я с тобой."
-
-        if not reply:
+    elif u["search"]:
+        result = web_search(text)
+        if result:
+            reply = result
+        else:
             reply = ask_ai(text, user, h)
 
+    elif u["presence"]:
+        reply = "Я рядом."
+
+    elif user["state"]["mood"] == "low":
+        reply = "Я с тобой."
+
+    if not reply:
+        reply = ask_ai(text, user, h)
+
+    # ========= ОТПРАВКА =========
     requests.post(TELEGRAM_URL, json={
         "chat_id": chat_id,
         "text": reply
@@ -179,20 +175,37 @@ def ask_ai(user_text, user, h):
         "Content-Type": "application/json"
     }
 
+    # 💥 СБРОС КОНТЕКСТА (убираем залипание)
+    if any(x in user_text.lower() for x in [
+        "как меня зовут",
+        "кто я",
+        "кто ты",
+        "меня зовут"
+    ]):
+        h.clear()
+
     h.append({"role": "user", "content": user_text})
 
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой собеседник.
+Ты живой собеседник и помощник.
 
 ПАМЯТЬ:
 {json.dumps(user, ensure_ascii=False)}
 
+РЕЖИМ: АГЕНТ
+
+ТВОЯ РОЛЬ:
+— помогать
+— думать вместе
+— вести диалог
+
 ПРАВИЛА:
-— если знаешь имя → используй его
+— если знаешь имя → используй
 — не теряй память
-— не отвечай "не знаю", если знаешь
+— не отвечай не в тему
+— не зацикливайся на прошлой теме
 
 СТИЛЬ:
 — живой
@@ -217,7 +230,7 @@ def ask_ai(user_text, user, h):
         response_json = r.json()
 
         if "choices" not in response_json:
-            return f"Ошибка: {response_json}"
+            return f"Ошибка формата: {response_json}"
 
         reply = response_json["choices"][0]["message"]["content"]
 
@@ -228,6 +241,9 @@ def ask_ai(user_text, user, h):
     except Exception as e:
         return f"Сбой: {str(e)}"
 
+# ======================
+# 🔥 HEALTH
+# ======================
 @app.route('/health')
 def health():
     return "ok"
