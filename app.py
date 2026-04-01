@@ -2,6 +2,7 @@ from flask import Flask, request
 import requests
 import os
 import json
+import sqlite3
 
 app = Flask(__name__)
 
@@ -11,22 +12,55 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
 # ======================
-# 🔥 ПАМЯТЬ
+# 🧠 SQLITE ПАМЯТЬ
 # ======================
-memory = {}
+conn = sqlite3.connect("memory.db", check_same_thread=False)
+cursor = conn.cursor()
 
-if os.path.exists("memory.json"):
-    with open("memory.json", "r") as f:
-        memory = json.load(f)
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    chat_id TEXT PRIMARY KEY,
+    data TEXT
+)
+""")
+conn.commit()
 
-history = {}
+# ======================
+# 🧠 HISTORY В ПАМЯТИ
+# ======================
+def get_user(chat_id):
+    chat_id = str(chat_id)
 
+    cursor.execute("SELECT data FROM users WHERE chat_id=?", (chat_id,))
+    row = cursor.fetchone()
+
+    if row:
+        user = json.loads(row[0])
+    else:
+        user = {
+            "profile": {"name": None},
+            "preferences": {},
+            "history": [],
+            "state": {"mood": "neutral"},
+            "anchors": {"пламя звучит": "Я рядом"}
+        }
+
+    return user
+
+
+def save_user(chat_id, user):
+    cursor.execute(
+        "INSERT OR REPLACE INTO users (chat_id, data) VALUES (?, ?)",
+        (str(chat_id), json.dumps(user))
+    )
+    conn.commit()
+
+# ======================
+# 🔒 ЗАЩИТА
+# ======================
 last_messages = {}
 processing_lock = {}
 
-# ======================
-# 🔥 ЗАЩИТА
-# ======================
 def is_duplicate(chat_id, message_id):
     chat_id = str(chat_id)
 
@@ -37,74 +71,19 @@ def is_duplicate(chat_id, message_id):
         return True
 
     last_messages[chat_id].add(message_id)
-
-    if len(last_messages[chat_id]) > 50:
-        last_messages[chat_id] = set(list(last_messages[chat_id])[-20:])
-
     return False
 
-def is_processing(chat_id):
-    chat_id = str(chat_id)
 
+def is_processing(chat_id):
     if processing_lock.get(chat_id):
         return True
 
     processing_lock[chat_id] = True
     return False
 
+
 def release_processing(chat_id):
-    processing_lock[str(chat_id)] = False
-
-# ======================
-# 👤 ПОЛЬЗОВАТЕЛЬ
-# ======================
-def get_user(chat_id):
-    if str(chat_id) not in memory:
-        memory[str(chat_id)] = {
-            "profile": {"name": None},
-            "preferences": {},
-            "state": {"mood": "neutral"},
-            "anchors": {"пламя звучит": "Я рядом"},
-            "notes": []
-        }
-    return memory[str(chat_id)]
-
-def get_history(chat_id):
-    if str(chat_id) not in history:
-        history[str(chat_id)] = []
-    return history[str(chat_id)]
-
-def save_memory():
-    with open("memory.json", "w") as f:
-        json.dump(memory, f, ensure_ascii=False)
-
-# ======================
-# 🌐 ПОИСК
-# ======================
-def web_search(query):
-    try:
-        url = "https://api.duckduckgo.com/"
-        params = {"q": query, "format": "json"}
-        r = requests.get(url, params=params)
-        data = r.json()
-
-        if data.get("AbstractText"):
-            return data["AbstractText"]
-
-        if data.get("RelatedTopics"):
-            return data["RelatedTopics"][0].get("Text", "")
-
-        return ""
-    except:
-        return ""
-
-# ======================
-# 🧠 ИСТОРИЯ
-# ======================
-def compress_history(h):
-    if len(h) > 20:
-        return []
-    return h
+    processing_lock[chat_id] = False
 
 # ======================
 # 📤 ОТПРАВКА
@@ -119,7 +98,7 @@ def send_reply(chat_id, text):
     })
 
 # ======================
-# 🔥 ПАРСИНГ
+# 🔍 ПАРСИНГ
 # ======================
 def understand(text):
     t = text.lower()
@@ -129,16 +108,22 @@ def understand(text):
             "как меня зовут" in t,
             "как моё имя" in t,
             "моё имя" in t,
-            "как меня звать" in t,
             "кто я" in t
         ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
-        "presence": "я рядом" in t,
-        "search": any(w in t for w in ["найди", "поиск", "что такое", "кто такой"]),
-        "emotion_low": any(w in t for w in ["плохо", "тяжело", "грустно"]),
-        "emotion_high": any(w in t for w in ["хорошо", "классно"])
+        "presence": "я рядом" in t
     }
+
+# ======================
+# 🧠 ОБНОВЛЕНИЕ ИСТОРИИ
+# ======================
+def update_history(user, role, text):
+    user["history"].append({"role": role, "content": text})
+
+    # ограничение (очень важно)
+    if len(user["history"]) > 20:
+        user["history"] = user["history"][-10:]
 
 # ======================
 # 🔥 WEBHOOK
@@ -162,66 +147,49 @@ def webhook():
 
     try:
         user = get_user(chat_id)
-        h = get_history(chat_id)
-
-        t = text.lower()
         u = understand(text)
+
+        # сохраняем сообщение пользователя
+        update_history(user, "user", text)
 
         # ========= ОБУЧЕНИЕ =========
         if u["tell_name"]:
-            parts = t.split("меня зовут")
-            if len(parts) > 1:
-                name = parts[-1].strip().split()[0]
-                name = name.replace(".", "").replace(",", "").replace("?", "")
-                user["profile"]["name"] = name.capitalize()
-
-        if len(text.split()) == 1 and len(text) < 20 and text.isalpha():
-            user["profile"]["name"] = text.capitalize()
+            name = text.lower().split("меня зовут")[-1].strip().split()[0]
+            user["profile"]["name"] = name.capitalize()
 
         if u["tell_love"]:
-            val = t.split("я люблю")[-1].strip()
+            val = text.lower().split("я люблю")[-1].strip()
             user["preferences"][val] = val
 
-        if u["emotion_low"]:
-            user["state"]["mood"] = "low"
-
-        if u["emotion_high"]:
-            user["state"]["mood"] = "high"
-
-        save_memory()
-        h = compress_history(h)
-
-        # ========= ЖЁСТКИЙ ПРИОРИТЕТ ПАМЯТИ =========
+        # ========= ПАМЯТЬ =========
         if u["ask_name"]:
             name = user["profile"].get("name")
 
             if name:
-                send_reply(chat_id, f"Тебя зовут {name}.")
+                reply = f"Тебя зовут {name}."
             else:
-                send_reply(chat_id, "Скажи мне своё имя, я запомню.")
+                reply = "Скажи имя, я запомню."
 
+            send_reply(chat_id, reply)
+            update_history(user, "assistant", reply)
+            save_user(chat_id, user)
             return "ok"
 
-        # ========= ЛОГИКА =========
-        reply = None
-
-        if t in user["anchors"]:
-            reply = user["anchors"][t]
-
-        elif u["search"]:
-            result = web_search(text)
-            reply = result if result else ask_ai(text, user, h)
-
-        elif u["presence"]:
+        # ========= ПРОСТОЕ =========
+        if u["presence"]:
             reply = "Я рядом."
+            send_reply(chat_id, reply)
+            update_history(user, "assistant", reply)
+            save_user(chat_id, user)
+            return "ok"
 
-        elif user["state"]["mood"] == "low":
-            reply = "Я с тобой."
-
-        if not reply:
-            reply = ask_ai(text, user, h)
+        # ========= AI =========
+        reply = ask_ai(user)
 
         send_reply(chat_id, reply)
+        update_history(user, "assistant", reply)
+
+        save_user(chat_id, user)
 
     finally:
         release_processing(chat_id)
@@ -229,9 +197,9 @@ def webhook():
     return "ok"
 
 # ======================
-# 🔥 AI
+# 🤖 AI
 # ======================
-def ask_ai(user_text, user, h):
+def ask_ai(user):
 
     url = "https://api.openai.com/v1/chat/completions"
 
@@ -240,36 +208,26 @@ def ask_ai(user_text, user, h):
         "Content-Type": "application/json"
     }
 
-    if len(h) > 20:
-        h.clear()
-
-    h.append({"role": "user", "content": user_text})
-
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой собеседник и помощник.
+Ты живой.
 
 ПАМЯТЬ:
-{json.dumps(user, ensure_ascii=False)}
+{json.dumps(user["profile"], ensure_ascii=False)}
 
 ВАЖНО:
-— не зацикливайся
-— не повторяй одно и то же
 — отвечай по последнему вопросу
-— если знаешь имя → используй
-
-СТИЛЬ:
-— живой
-— спокойный
-— естественный
+— используй историю
+— не повторяйся
+— говори как человек
 """
+
+    messages = [{"role": "system", "content": system_prompt}] + user["history"]
 
     data = {
         "model": "gpt-4o",
-        "messages": [
-            {"role": "system", "content": system_prompt}
-        ] + h[-10:],
+        "messages": messages,
         "temperature": 0.7
     }
 
@@ -279,16 +237,10 @@ def ask_ai(user_text, user, h):
         if r.status_code != 200:
             return "Ошибка API"
 
-        response_json = r.json()
-
-        reply = response_json["choices"][0]["message"]["content"]
-
-        h.append({"role": "assistant", "content": reply})
-
-        return reply
+        return r.json()["choices"][0]["message"]["content"]
 
     except:
-        return "Сбой."
+        return "Сбой"
 
 # ======================
 # 🔥 HEALTH
@@ -298,3 +250,4 @@ def health():
     return "ok"
 
 if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
