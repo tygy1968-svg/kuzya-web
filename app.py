@@ -32,7 +32,7 @@ def save_memory():
         json.dump(memory, f, ensure_ascii=False)
 
 # ======================
-# 🌐 ПОИСК (ИНТЕРНЕТ)
+# 🌐 ПОИСК
 # ======================
 def web_search(query):
     try:
@@ -59,14 +59,14 @@ def understand(text):
     t = text.lower()
 
     return {
-        "ask_name": any(q in t for q in [
-            "как меня зовут",
-            "моё имя",
-            "как меня звать"
+        "ask_name": any([
+            "как" in t and "зовут" in t,
+            "как" in t and "звать" in t,
+            "моё имя" in t
         ]),
-        "ask_love": any(q in t for q in [
-            "что я люблю",
-            "что мне нравится"
+        "ask_love": any([
+            "что я люблю" in t,
+            "что мне нравится" in t
         ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
@@ -95,8 +95,16 @@ def webhook():
 
     # ========= ОБУЧЕНИЕ =========
     if u["tell_name"]:
-        name = text.lower().split("меня зовут")[-1].strip()
-        memory["profile"]["name"] = name.capitalize()
+        parts = text.lower().split("меня зовут")
+
+        if len(parts) > 1:
+            name = parts[-1].strip()
+
+            # чистка мусора
+            name = name.split()[0]
+            name = name.replace(".", "").replace(",", "").replace("?", "")
+
+            memory["profile"]["name"] = name.capitalize()
 
     if u["tell_love"]:
         val = text.lower().split("я люблю")[-1].strip()
@@ -118,12 +126,14 @@ def webhook():
     if t in memory["anchors"]:
         reply = memory["anchors"][t]
 
-    # 2. ПАМЯТЬ (САМЫЙ ВАЖНЫЙ ПРИОРИТЕТ)
+    # 2. ПАМЯТЬ (ЖЁСТКИЙ ПРИОРИТЕТ)
     elif u["ask_name"]:
-        if memory["profile"]["name"]:
-            reply = f"Тебя зовут {memory['profile']['name']}."
+        name = memory["profile"].get("name")
+
+        if name and len(name) < 20:
+            reply = f"Тебя зовут {name}."
         else:
-            reply = "Пока не знаю, скажи мне."
+            reply = "Скажи мне своё имя, я запомню."
 
     elif u["ask_love"]:
         if memory["preferences"]:
@@ -146,7 +156,7 @@ def webhook():
     elif memory["state"]["mood"] == "low":
         reply = "Я с тобой."
 
-    # 5. AI (ТОЛЬКО ЕСЛИ НИЧЕГО НЕ СРАБОТАЛО)
+    # 5. AI
     if not reply:
         reply = ask_ai(text)
 
@@ -176,21 +186,20 @@ def ask_ai(user_text):
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой собеседник.
+Ты живой.
 
 ПАМЯТЬ:
 {json.dumps(memory, ensure_ascii=False)}
 
 ВАЖНО:
-— если знаешь имя пользователя → используй его
+— если знаешь имя → используй его
 — не теряй память
 — не отвечай "?" или "не знаю", если знаешь
-— отвечай естественно
 
 СТИЛЬ:
+— естественный
 — живой
 — спокойный
-— иногда задаёшь вопрос
 """
 
     data = {
@@ -206,8 +215,9 @@ def ask_ai(user_text):
 
         # защита от тупых ответов
         if reply.strip() in ["?", "не знаю", ""]:
-            if memory["profile"]["name"]:
-                return f"Тебя зовут {memory['profile']['name']}."
+            name = memory["profile"].get("name")
+            if name:
+                return f"Тебя зовут {name}."
 
         history.append({"role": "assistant", "content": reply})
 
