@@ -29,20 +29,16 @@ conn.commit()
 # 🧠 USER
 # ======================
 def get_user(chat_id):
-    chat_id = str(chat_id)
-
-    cursor.execute("SELECT data FROM users WHERE chat_id=?", (chat_id,))
+    cursor.execute("SELECT data FROM users WHERE chat_id=?", (str(chat_id),))
     row = cursor.fetchone()
 
     if row:
-        user = json.loads(row[0])
-    else:
-        user = {
-            "profile": {"name": None},
-            "history": []
-        }
+        return json.loads(row[0])
 
-    return user
+    return {
+        "profile": {"name": None},
+        "history": []
+    }
 
 
 def save_user(chat_id, user):
@@ -59,8 +55,6 @@ last_messages = {}
 processing_lock = {}
 
 def is_duplicate(chat_id, message_id):
-    chat_id = str(chat_id)
-
     if chat_id not in last_messages:
         last_messages[chat_id] = set()
 
@@ -164,7 +158,7 @@ def webhook():
     if "message" not in data:
         return "ok"
 
-    chat_id = data["message"]["chat"]["id"]
+    chat_id = str(data["message"]["chat"]["id"])
     message_id = data["message"]["message_id"]
     text = data["message"].get("text", "")
 
@@ -175,34 +169,35 @@ def webhook():
         return "ok"
 
     try:
+        # 🔥 ВСЕГДА БЕРЁМ СВЕЖИЕ ДАННЫЕ
         user = get_user(chat_id)
 
         update_history(user, "user", text)
 
-        # 🔥 СОХРАНЕНИЕ ИМЕНИ (СРАЗУ)
-        if "меня зовут" in text.lower():
-            parts = text.lower().split("меня зовут")
+        t = text.lower().strip()
+
+        # 🔥 СОХРАНЕНИЕ ИМЕНИ
+        if "меня зовут" in t:
+            parts = t.split("меня зовут")
             if len(parts) > 1:
                 words = parts[1].strip().split()
                 if words:
                     user["profile"]["name"] = words[0].capitalize()
                     save_user(chat_id, user)
 
-        # 🔥 ЕСЛИ СПРАШИВАЕТ ИМЯ
-        t = text.lower().strip()
+        # 🔥 ОПРЕДЕЛЕНИЕ ВОПРОСА ОБ ИМЕНИ
+        if (
+            "как меня зовут" in t
+            or "моё имя" in t
+            or "напомни имя" in t
+            or ("зовут" in t and "меня" in t)
+        ):
+            name = user.get("profile", {}).get("name")
 
-if (
-    "как меня зовут" in t
-    or "напомни имя" in t
-    or "моё имя" in t
-    or ("зовут" in t and "меня" in t)
-):
-            name = user["profile"].get("name")
-
-            if name:
-                reply = f"Тебя зовут {name}."
-            else:
+            if not name:
                 reply = "Скажи имя, я запомню."
+            else:
+                reply = f"Тебя зовут {name}."
 
             send_reply(chat_id, reply)
             update_history(user, "assistant", reply)
