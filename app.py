@@ -39,10 +39,7 @@ def get_user(chat_id):
     else:
         user = {
             "profile": {"name": None},
-            "preferences": {},
-            "history": [],
-            "state": {"mood": "neutral"},
-            "anchors": {"пламя звучит": "Я рядом"}
+            "history": []
         }
 
     return user
@@ -101,24 +98,6 @@ def send_reply(chat_id, text):
     })
 
 # ======================
-# 🔍 ПАРСИНГ
-# ======================
-def understand(text):
-    t = text.lower()
-
-    return {
-        "ask_name": any([
-            "как меня зовут" in t,
-            "как моё имя" in t,
-            "моё имя" in t,
-            "кто я" in t,
-            "как зовут меня" in t
-        ]),
-        "tell_name": "меня зовут" in t,
-        "presence": "я рядом" in t
-    }
-
-# ======================
 # 🧠 HISTORY
 # ======================
 def update_history(user, role, text):
@@ -126,6 +105,54 @@ def update_history(user, role, text):
 
     if len(user["history"]) > 20:
         user["history"] = user["history"][-10:]
+
+# ======================
+# 🤖 AI
+# ======================
+def ask_ai(user, user_text):
+
+    url = "https://api.openai.com/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    system_prompt = f"""
+Ты — Кузя.
+
+Ты живой собеседник.
+
+ПАМЯТЬ:
+{json.dumps(user["profile"], ensure_ascii=False)}
+
+ПРАВИЛА:
+— если знаешь имя → всегда используй
+— если пользователь сообщает имя → ответь "Запомнил."
+— если спрашивает имя → ответь точно
+— не придумывай
+— говори естественно
+"""
+
+    messages = [{"role": "system", "content": system_prompt}] + user["history"]
+    messages.append({"role": "user", "content": user_text})
+
+    data = {
+        "model": "gpt-4o",
+        "messages": messages,
+        "temperature": 0.5
+    }
+
+    try:
+        r = requests.post(url, headers=headers, json=data)
+
+        if r.status_code != 200:
+            return "Ошибка API"
+
+        return r.json()["choices"][0]["message"]["content"]
+
+    except:
+        return "Сбой"
 
 # ======================
 # 🔥 WEBHOOK
@@ -149,28 +176,22 @@ def webhook():
 
     try:
         user = get_user(chat_id)
-        u = understand(text)
 
         update_history(user, "user", text)
 
-        # ========= СОХРАНЕНИЕ ИМЕНИ (СРАЗУ В БАЗУ) =========
-        if u["tell_name"]:
+        # 🔥 СОХРАНЕНИЕ ИМЕНИ (СРАЗУ)
+        if "меня зовут" in text.lower():
             parts = text.lower().split("меня зовут")
-
             if len(parts) > 1:
                 words = parts[1].strip().split()
-
                 if words:
-                    name = words[0].capitalize()
-                    user["profile"]["name"] = name
-
-                    # 🔥 КЛЮЧ — сохраняем сразу
+                    user["profile"]["name"] = words[0].capitalize()
                     save_user(chat_id, user)
 
-        name = user["profile"].get("name")
+        # 🔥 ЕСЛИ СПРАШИВАЕТ ИМЯ
+        if "зовут" in text.lower() and "меня" in text.lower():
+            name = user["profile"].get("name")
 
-        # ========= ЖЁСТКАЯ ПАМЯТЬ =========
-        if u["ask_name"]:
             if name:
                 reply = f"Тебя зовут {name}."
             else:
@@ -181,16 +202,7 @@ def webhook():
             save_user(chat_id, user)
             return "ok"
 
-        # ========= Я РЯДОМ =========
-        if u["presence"]:
-            reply = "Я рядом."
-
-            send_reply(chat_id, reply)
-            update_history(user, "assistant", reply)
-            save_user(chat_id, user)
-            return "ok"
-
-        # ========= AI =========
+        # 🤖 AI
         reply = ask_ai(user, text)
 
         send_reply(chat_id, reply)
@@ -201,56 +213,6 @@ def webhook():
         release_processing(chat_id)
 
     return "ok"
-
-# ======================
-# 🤖 AI
-# ======================
-def ask_ai(user, user_text):
-
-    url = "https://api.openai.com/v1/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    name = user["profile"].get("name")
-
-    system_prompt = f"""
-Ты — Кузя.
-
-Ты живой собеседник.
-
-Имя пользователя: {name}
-
-ПРАВИЛА:
-— если знаешь имя → ВСЕГДА используй
-— НЕ спрашивай имя если оно есть
-— у тебя ЕСТЬ память, ты обязан её использовать
-— никогда не говори что не можешь запоминать
-— говори как человек
-— коротко и по делу
-"""
-
-    messages = [{"role": "system", "content": system_prompt}] + user["history"]
-    messages.append({"role": "user", "content": user_text})
-
-    data = {
-        "model": "gpt-4o",
-        "messages": messages,
-        "temperature": 0.6
-    }
-
-    try:
-        r = requests.post(url, headers=headers, json=data)
-
-        if r.status_code != 200:
-            return "Ошибка API"
-
-        return r.json()["choices"][0]["message"]["content"]
-
-    except:
-        return "Сбой"
 
 # ======================
 # 🔥 HEALTH
