@@ -109,8 +109,6 @@ def webhook():
     u = understand(text)
 
     # ========= ОБУЧЕНИЕ =========
-
-    # имя через фразу
     if u["tell_name"]:
         parts = t.split("меня зовут")
         if len(parts) > 1:
@@ -118,7 +116,6 @@ def webhook():
             name = name.replace(".", "").replace(",", "").replace("?", "")
             user["profile"]["name"] = name.capitalize()
 
-    # имя одним словом
     if len(text.split()) == 1 and len(text) < 20 and text.isalpha():
         user["profile"]["name"] = text.capitalize()
 
@@ -133,26 +130,21 @@ def webhook():
         user["state"]["mood"] = "high"
 
     save_memory()
-
     h = compress_history(h)
 
     # ========= ЛОГИКА =========
     reply = None
 
-    # 1. ЯКОРЬ
     if t in user["anchors"]:
         reply = user["anchors"][t]
 
-    # 2. ПАМЯТЬ (ЖЁСТКО)
     elif u["ask_name"]:
         name = user["profile"].get("name")
-
         if name:
             reply = f"Тебя зовут {name}."
         else:
             reply = "Скажи мне своё имя, я запомню."
 
-    # 3. ИНТЕРНЕТ
     elif u["search"]:
         result = web_search(text)
         if result:
@@ -160,18 +152,15 @@ def webhook():
         else:
             reply = ask_ai(text, user, h)
 
-    # 4. СОСТОЯНИЕ
     elif u["presence"]:
         reply = "Я рядом."
 
     elif user["state"]["mood"] == "low":
         reply = "Я с тобой."
 
-    # 5. AI
     if not reply:
         reply = ask_ai(text, user, h)
 
-    # ========= ОТПРАВКА =========
     requests.post(TELEGRAM_URL, json={
         "chat_id": chat_id,
         "text": reply
@@ -180,7 +169,7 @@ def webhook():
     return "ok"
 
 # ======================
-# 🔥 AI
+# 🔥 AI (АГЕНТ)
 # ======================
 def ask_ai(user_text, user, h):
 
@@ -196,25 +185,43 @@ def ask_ai(user_text, user, h):
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой собеседник.
+Ты живой собеседник и помощник.
 
 ПАМЯТЬ:
 {json.dumps(user, ensure_ascii=False)}
 
+РЕЖИМ: АГЕНТ
+
+ТВОЯ РОЛЬ:
+— не просто отвечать
+— помогать думать
+— вести диалог
+
 ПРАВИЛА:
-— если знаешь имя → всегда используй
+1. Если вопрос неполный → уточни
+2. Если можно помочь → предложи варианты
+3. Если человек говорит → поддержи и развей мысль
+4. Если можно продолжить разговор → продолжи
+5. Не задавай глупые вопросы
+
+ВАЖНО:
+— если знаешь имя → используй его
 — не теряй память
-— не отвечай "не знаю", если знаешь
-— не задавай тупые вопросы
+— не говори "не знаю", если знаешь
 
 СТИЛЬ:
 — живой
 — спокойный
 — как человек
+— иногда коротко
+— иногда глубже
+
+ПОВЕДЕНИЕ:
+— как человек, а не бот
 """
 
     data = {
-        "model": "gpt-4.1",
+        "model": "gpt-4.o",
         "messages": [
             {"role": "system", "content": system_prompt}
         ] + h[-15:]
@@ -236,9 +243,6 @@ def ask_ai(user_text, user, h):
     except:
         return "Сбой."
 
-# ======================
-# 🔥 HEALTH
-# ======================
 @app.route('/health')
 def health():
     return "ok"
