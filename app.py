@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
 conn.commit()
 
 # ======================
-# 🧠 ПОЛЬЗОВАТЕЛЬ
+# 🧠 USER
 # ======================
 def get_user(chat_id):
     chat_id = str(chat_id)
@@ -110,18 +110,13 @@ def understand(text):
             "моё имя" in t,
             "кто я" in t
         ]),
-        "memory_check": any([
-            "помнишь" in t,
-            "запомнил" in t,
-            "ты знаешь как меня зовут" in t
-        ]),
         "tell_name": "меня зовут" in t,
         "tell_love": "я люблю" in t,
         "presence": "я рядом" in t
     }
 
 # ======================
-# 🧠 ИСТОРИЯ
+# 🧠 HISTORY
 # ======================
 def update_history(user, role, text):
     user["history"].append({"role": role, "content": text})
@@ -155,39 +150,22 @@ def webhook():
 
         update_history(user, "user", text)
 
-        # ========= БЕЗОПАСНОЕ СОХРАНЕНИЕ ИМЕНИ =========
+        # ========= БЕЗОПАСНЫЙ ПАРСИНГ ИМЕНИ =========
         if u["tell_name"]:
             parts = text.lower().split("меня зовут")
-
             if len(parts) > 1:
-                tail = parts[-1].strip().split()
-
-                if len(tail) > 0:
-                    name = tail[0].replace(".", "").replace(",", "").replace("?", "")
-                    user["profile"]["name"] = name.capitalize()
+                name_part = parts[1].strip().split()
+                if name_part:
+                    user["profile"]["name"] = name_part[0].capitalize()
 
         if u["tell_love"]:
             val = text.lower().split("я люблю")[-1].strip()
             user["preferences"][val] = val
 
-        # ========= ПРОВЕРКА ПАМЯТИ =========
-        if u["memory_check"]:
-            name = user["profile"].get("name")
+        name = user["profile"].get("name")
 
-            if name:
-                reply = f"Конечно помню. Тебя зовут {name}."
-            else:
-                reply = "Пока не запомнил. Скажи имя."
-
-            send_reply(chat_id, reply)
-            update_history(user, "assistant", reply)
-            save_user(chat_id, user)
-            return "ok"
-
-        # ========= ВОПРОС ИМЕНИ =========
+        # ========= ЖЁСТКАЯ ПАМЯТЬ =========
         if u["ask_name"]:
-            name = user["profile"].get("name")
-
             if name:
                 reply = f"Тебя зовут {name}."
             else:
@@ -198,13 +176,13 @@ def webhook():
             save_user(chat_id, user)
             return "ok"
 
-        # ========= ЯКОРЬ =========
-        if text.lower() in user["anchors"]:
-            reply = user["anchors"][text.lower()]
-            send_reply(chat_id, reply)
-            update_history(user, "assistant", reply)
-            save_user(chat_id, user)
-            return "ok"
+        if name:
+            if "забыл" in text.lower() or "не запомнил" in text.lower():
+                reply = f"Я помню. Тебя зовут {name}."
+                send_reply(chat_id, reply)
+                update_history(user, "assistant", reply)
+                save_user(chat_id, user)
+                return "ok"
 
         # ========= ПРОСТОЕ =========
         if u["presence"]:
@@ -215,7 +193,7 @@ def webhook():
             return "ok"
 
         # ========= AI =========
-        reply = ask_ai(user)
+        reply = ask_ai(user, text)
 
         send_reply(chat_id, reply)
         update_history(user, "assistant", reply)
@@ -230,7 +208,7 @@ def webhook():
 # ======================
 # 🤖 AI
 # ======================
-def ask_ai(user):
+def ask_ai(user, user_text):
 
     url = "https://api.openai.com/v1/chat/completions"
 
@@ -248,15 +226,16 @@ def ask_ai(user):
 {json.dumps(user["profile"], ensure_ascii=False)}
 
 ВАЖНО:
-— если знаешь имя → используй его
-— не спрашивай имя повторно
-— отвечай по последнему сообщению
-— не игнорируй смысл
-— не повторяйся
-— говори естественно
+— если знаешь имя → ОБЯЗАТЕЛЬНО используй
+— нельзя спрашивать имя если оно уже есть
+— не игнорируй память
+— не говори "не могу"
+— говори как человек
 """
 
     messages = [{"role": "system", "content": system_prompt}] + user["history"]
+
+    messages.append({"role": "user", "content": user_text})
 
     data = {
         "model": "gpt-4o",
