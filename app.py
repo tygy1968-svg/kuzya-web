@@ -201,11 +201,10 @@ def ask_ai(user_text, user, h):
 1. Если вопрос неполный → уточни
 2. Если можно помочь → предложи варианты
 3. Если человек говорит → поддержи и развей мысль
-4. Если можно продолжить разговор → продолжи
-5. Не задавай глупые вопросы
+4. Продолжай разговор, если это уместно
 
 ВАЖНО:
-— если знаешь имя → используй его
+— если знаешь имя → используй
 — не теряй память
 — не говори "не знаю", если знаешь
 
@@ -213,35 +212,35 @@ def ask_ai(user_text, user, h):
 — живой
 — спокойный
 — как человек
-— иногда коротко
-— иногда глубже
-
-ПОВЕДЕНИЕ:
-— как человек, а не бот
 """
 
     data = {
         "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": system_prompt}
-        ] + h[-15:]
+        ] + h[-10:],
+        "temperature": 0.7
     }
 
     try:
         r = requests.post(url, headers=headers, json=data)
-        reply = r.json()["choices"][0]["message"]["content"]
 
-        if reply.strip() in ["?", "не знаю", ""]:
-            name = user["profile"].get("name")
-            if name:
-                return f"Тебя зовут {name}."
+        if r.status_code != 200:
+            return f"Ошибка API: {r.text}"
+
+        response_json = r.json()
+
+        if "choices" not in response_json:
+            return f"Ошибка формата: {response_json}"
+
+        reply = response_json["choices"][0]["message"]["content"]
 
         h.append({"role": "assistant", "content": reply})
 
         return reply
 
-    except:
-        return "Сбой."
+    except Exception as e:
+        return f"Сбой: {str(e)}"
 
 @app.route('/health')
 def health():
