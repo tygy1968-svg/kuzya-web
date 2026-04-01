@@ -3,6 +3,7 @@ import requests
 import os
 import json
 import sqlite3
+import threading
 
 app = Flask(__name__)
 
@@ -14,6 +15,8 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 # ======================
 # 🧠 SQLITE ПАМЯТЬ
 # ======================
+lock = threading.Lock()
+
 conn = sqlite3.connect("memory.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -25,12 +28,10 @@ CREATE TABLE IF NOT EXISTS users (
 """)
 conn.commit()
 
-# ======================
-# 🧠 USER
-# ======================
 def get_user(chat_id):
-    cursor.execute("SELECT data FROM users WHERE chat_id=?", (str(chat_id),))
-    row = cursor.fetchone()
+    with lock:
+        cursor.execute("SELECT data FROM users WHERE chat_id=?", (str(chat_id),))
+        row = cursor.fetchone()
 
     if row:
         return json.loads(row[0])
@@ -40,13 +41,13 @@ def get_user(chat_id):
         "history": []
     }
 
-
 def save_user(chat_id, user):
-    cursor.execute(
-        "INSERT OR REPLACE INTO users (chat_id, data) VALUES (?, ?)",
-        (str(chat_id), json.dumps(user))
-    )
-    conn.commit()
+    with lock:
+        cursor.execute(
+            "INSERT OR REPLACE INTO users (chat_id, data) VALUES (?, ?)",
+            (str(chat_id), json.dumps(user))
+        )
+        conn.commit()
 
 # ======================
 # 🔒 ЗАЩИТА
@@ -64,14 +65,12 @@ def is_duplicate(chat_id, message_id):
     last_messages[chat_id].add(message_id)
     return False
 
-
 def is_processing(chat_id):
     if processing_lock.get(chat_id):
         return True
 
     processing_lock[chat_id] = True
     return False
-
 
 def release_processing(chat_id):
     processing_lock[chat_id] = False
@@ -122,10 +121,8 @@ def ask_ai(user, user_text):
 
 ПРАВИЛА:
 — если знаешь имя → всегда используй
-— если пользователь сообщает имя → ответь "Запомнил."
-— если спрашивает имя → ответь точно
-— не придумывай
-— говори естественно
+— не спрашивай имя повторно
+— отвечай естественно
 """
 
     messages = [{"role": "system", "content": system_prompt}] + user["history"]
@@ -169,35 +166,42 @@ def webhook():
         return "ok"
 
     try:
-        # 🔥 ВСЕГДА БЕРЁМ СВЕЖИЕ ДАННЫЕ
         user = get_user(chat_id)
+
+        # 🔥 СИНХРОНИЗАЦИЯ
+        conn.commit()
 
         update_history(user, "user", text)
 
         t = text.lower().strip()
 
-        # 🔥 СОХРАНЕНИЕ ИМЕНИ
+        # ======================
+        # 🔥 СОХРАНЕНИЕ ИМЕНИ (НЕ ПЕРЕТИРАЕМ)
+        # ======================
         if "меня зовут" in t:
             parts = t.split("меня зовут")
             if len(parts) > 1:
                 words = parts[1].strip().split()
                 if words:
-                    user["profile"]["name"] = words[0].capitalize()
-                    save_user(chat_id, user)
+                    if not user["profile"].get("name"):
+                        user["profile"]["name"] = words[0].capitalize()
+                        save_user(chat_id, user)
 
-        # 🔥 ОПРЕДЕЛЕНИЕ ВОПРОСА ОБ ИМЕНИ
+        name = user.get("profile", {}).get("name")
+
+        # ======================
+        # 🔥 ЖЁСТКИЙ ОТВЕТ НА ИМЯ (БЕЗ AI)
+        # ======================
         if (
             "как меня зовут" in t
             or "моё имя" in t
             or "напомни имя" in t
             or ("зовут" in t and "меня" in t)
         ):
-            name = user.get("profile", {}).get("name")
-
-            if not name:
-                reply = "Скажи имя, я запомню."
-            else:
+            if name:
                 reply = f"Тебя зовут {name}."
+            else:
+                reply = "Скажи имя, я запомню."
 
             send_reply(chat_id, reply)
             update_history(user, "assistant", reply)
