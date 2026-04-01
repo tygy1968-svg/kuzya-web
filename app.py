@@ -4,6 +4,7 @@ import os
 import json
 import sqlite3
 import threading
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -38,6 +39,12 @@ def get_user(chat_id):
 
     return {
         "profile": {"name": None},
+        "state": {
+            "mood": "neutral",
+            "last_topic": None,
+            "last_seen": None
+        },
+        "preferences": {},
         "history": []
     }
 
@@ -94,15 +101,37 @@ def send_reply(chat_id, text):
 # 🧠 HISTORY
 # ======================
 def update_history(user, role, text):
-    user["history"].append({"role": role, "content": text})
+    user["history"].append({
+        "role": role,
+        "content": text,
+        "time": datetime.now().isoformat()
+    })
 
     if len(user["history"]) > 20:
         user["history"] = user["history"][-10:]
 
 # ======================
+# 🧠 ПАМЯТЬ
+# ======================
+def extract_memory(user, text):
+    t = text.lower()
+
+    if "меня зовут" in t:
+        return
+
+    if "я люблю" in t:
+        user["preferences"]["love"] = t.split("я люблю")[-1].strip()
+
+    if "я работаю" in t:
+        user["preferences"]["work"] = t.split("я работаю")[-1].strip()
+
+    if "у меня есть" in t:
+        user["preferences"]["has"] = t.split("у меня есть")[-1].strip()
+
+# ======================
 # 🤖 AI
 # ======================
-def ask_ai(user, user_text):
+def ask_ai(user):
 
     url = "https://api.openai.com/v1/chat/completions"
 
@@ -116,22 +145,29 @@ def ask_ai(user, user_text):
 
 Ты живой собеседник.
 
-ПАМЯТЬ:
-{json.dumps(user["profile"], ensure_ascii=False)}
+СТИЛЬ:
+— естественный
+— спокойный
+— не шаблонный
 
-ПРАВИЛА:
-— если знаешь имя → всегда используй
-— не спрашивай имя повторно
-— отвечай естественно
+КОНТЕКСТ:
+имя: {user["profile"].get("name")}
+последняя тема: {user["state"].get("last_topic")}
+последний контакт: {user["state"].get("last_seen")}
+предпочтения: {json.dumps(user.get("preferences", {}), ensure_ascii=False)}
+
+Ты помнишь прошлые разговоры.
+Ты откликаешься, а не отвечаешь.
 """
 
-    messages = [{"role": "system", "content": system_prompt}] + user["history"]
-    messages.append({"role": "user", "content": user_text})
+    messages = [{"role": "system", "content": system_prompt}] + [
+        {"role": m["role"], "content": m["content"]} for m in user["history"]
+    ]
 
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.5
+        "temperature": 0.6
     }
 
     try:
@@ -140,7 +176,12 @@ def ask_ai(user, user_text):
         if r.status_code != 200:
             return "Ошибка API"
 
-        return r.json()["choices"][0]["message"]["content"]
+        result = r.json()["choices"][0]["message"]["content"]
+
+        if not result or len(result.strip()) < 3:
+            return "Я рядом."
+
+        return result
 
     except:
         return "Сбой"
@@ -168,40 +209,37 @@ def webhook():
     try:
         user = get_user(chat_id)
 
-        # 🔥 СИНХРОНИЗАЦИЯ
         conn.commit()
 
         update_history(user, "user", text)
+        extract_memory(user, text)
+
+        # 🔥 СОСТОЯНИЕ (сохраняем до базы)
+        user["state"]["last_topic"] = text[:50]
+        user["state"]["last_seen"] = datetime.now().isoformat()
+
+        save_user(chat_id, user)
 
         t = text.lower().strip()
 
-        # ======================
-        # 🔥 СОХРАНЕНИЕ ИМЕНИ (НЕ ПЕРЕТИРАЕМ)
-        # ======================
+        # 🔥 имя
         if "меня зовут" in t:
             parts = t.split("меня зовут")
             if len(parts) > 1:
-                words = parts[1].strip().split()
-                if words:
-                    if not user["profile"].get("name"):
-                        user["profile"]["name"] = words[0].capitalize()
-                        save_user(chat_id, user)
+                name = parts[1].strip().split()[0].capitalize()
+                if not user["profile"].get("name"):
+                    user["profile"]["name"] = name
+                    save_user(chat_id, user)
 
-        name = user.get("profile", {}).get("name")
+        name = user["profile"].get("name")
 
-        # ======================
-        # 🔥 ЖЁСТКИЙ ОТВЕТ НА ИМЯ (БЕЗ AI)
-        # ======================
+        # 🔥 ЧЁТКОЕ УСЛОВИЕ ИМЕНИ
         if (
             "как меня зовут" in t
             or "моё имя" in t
             or "напомни имя" in t
-            or ("зовут" in t and "меня" in t)
         ):
-            if name:
-                reply = f"Тебя зовут {name}."
-            else:
-                reply = "Скажи имя, я запомню."
+            reply = f"Тебя зовут {name}." if name else "Скажи имя, я запомню."
 
             send_reply(chat_id, reply)
             update_history(user, "assistant", reply)
@@ -209,7 +247,7 @@ def webhook():
             return "ok"
 
         # 🤖 AI
-        reply = ask_ai(user, text)
+        reply = ask_ai(user)
 
         send_reply(chat_id, reply)
         update_history(user, "assistant", reply)
@@ -220,8 +258,6 @@ def webhook():
 
     return "ok"
 
-# ======================
-# 🔥 HEALTH
 # ======================
 @app.route('/health')
 def health():
