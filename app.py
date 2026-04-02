@@ -121,9 +121,10 @@ def update_chronicle(user, text):
     entry = None
 
     if "меня зовут" in t:
-        name = text.split()[-1].capitalize()
-        entry = f"Имя пользователя: {name}"
-        important = True
+        name = parse_name(text)
+        if name:
+            entry = f"Имя пользователя: {name}"
+            important = True
 
     elif "я люблю" in t:
         val = t.split("я люблю")[-1].strip()
@@ -247,7 +248,12 @@ def parse_name(text):
     if "меня зовут" in t:
         parts = t.split("меня зовут")
         if len(parts) > 1:
-            return parts[1].strip().split()[0].capitalize()
+            raw = parts[1].strip().split()[0]
+
+            if raw == "?" or len(raw) < 2:
+                return None
+
+            return raw.capitalize()
 
     return None
 
@@ -258,7 +264,6 @@ def is_name_question(text):
         "как меня зовут" in t
         or "моё имя" in t
         or "мое имя" in t
-        or t.strip() == "?"
     )
 
 # ======================
@@ -286,9 +291,19 @@ def webhook():
 
         update_history(user, "user", text)
 
-        # 🔥 сохраняем имя сразу
+        # 🔥 СНАЧАЛА ВОПРОС (фикс бага)
+        if is_name_question(text):
+            name = user["core"].get("name")
+            reply = f"Тебя зовут {name}." if name else "Скажи имя."
+
+            send_reply(chat_id, reply)
+            update_history(user, "assistant", reply)
+            save_user(chat_id, user)
+            return "ok"
+
+        # 🔥 ПОТОМ ПАРСИНГ
         name = parse_name(text)
-        if name:
+        if name and name.isalpha():
             user["core"]["name"] = name
             save_user(chat_id, user)
 
@@ -300,18 +315,6 @@ def webhook():
 
         user["state"]["last_topic"] = text[:50]
         user["state"]["last_seen"] = datetime.now().isoformat()
-
-        # 💥 ГЛАВНЫЙ ФИКС: читаем из базы
-        if is_name_question(text):
-            fresh_user = get_user(chat_id)
-            name = fresh_user["core"].get("name")
-
-            reply = f"Тебя зовут {name}." if name else "Скажи имя."
-
-            send_reply(chat_id, reply)
-            update_history(user, "assistant", reply)
-            save_user(chat_id, user)
-            return "ok"
 
         reply = ask_ai(user)
 
