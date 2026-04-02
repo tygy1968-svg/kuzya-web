@@ -46,7 +46,7 @@ def get_user(chat_id):
             "last_topic": None,
             "last_seen": None
         },
-        "preferences": {},
+        "preferences": [],
         "chronicle": "",
         "agent": {
             "log": [],
@@ -62,32 +62,6 @@ def save_user(chat_id, user):
             (str(chat_id), json.dumps(user))
         )
         conn.commit()
-
-# ======================
-# ЗАЩИТА
-# ======================
-last_messages = {}
-processing_lock = {}
-
-def is_duplicate(chat_id, message_id):
-    if chat_id not in last_messages:
-        last_messages[chat_id] = set()
-
-    if message_id in last_messages[chat_id]:
-        return True
-
-    last_messages[chat_id].add(message_id)
-    return False
-
-def is_processing(chat_id):
-    if processing_lock.get(chat_id):
-        return True
-
-    processing_lock[chat_id] = True
-    return False
-
-def release_processing(chat_id):
-    processing_lock[chat_id] = False
 
 # ======================
 # HISTORY
@@ -109,7 +83,9 @@ def extract_memory(user, text):
     t = text.lower()
 
     if "я люблю" in t:
-        user["preferences"]["love"] = t.split("я люблю")[-1].strip()
+        value = t.split("я люблю")[-1].strip()
+        if value not in user["preferences"]:
+            user["preferences"].append(value)
 
 # ======================
 # CHRONICLE
@@ -117,26 +93,22 @@ def extract_memory(user, text):
 def update_chronicle(user, text):
     t = text.lower()
 
-    important = False
-    entry = None
-
     if "меня зовут" in t:
         name = parse_name(text)
         if name:
-            entry = f"Имя пользователя: {name}"
-            important = True
+            # 💥 удаляем старое имя
+            user["chronicle"] = "\n".join([
+                line for line in user["chronicle"].split("\n")
+                if "Имя пользователя:" not in line
+            ])
+            user["chronicle"] += f"Имя пользователя: {name}\n"
 
-    elif "я люблю" in t:
+    if "я люблю" in t:
         val = t.split("я люблю")[-1].strip()
-        entry = f"Предпочтение: любит {val}"
-        important = True
+        entry = f"Любит: {val}"
 
-    if important and entry:
         if entry not in user["chronicle"]:
             user["chronicle"] += entry + "\n"
-
-    if len(user["chronicle"]) > 1000:
-        user["chronicle"] = user["chronicle"][-500:]
 
 # ======================
 # AGENT LOG
@@ -165,18 +137,13 @@ def reflect(user, user_text, reply):
         user["agent"]["reflection"] = user["agent"]["reflection"][-10:]
 
 # ======================
-# TOOL
+# MEMORY SUMMARY
 # ======================
-def choose_tool(text, user):
-    t = text.lower()
+def get_memory_summary(user):
+    name = user["core"].get("name")
+    prefs = ", ".join(user.get("preferences", []))
 
-    if "что такое" in t:
-        return "web", "нужно знание"
-
-    if user["preferences"]:
-        return "memory", "есть предпочтения"
-
-    return "llm", "обычный ответ"
+    return f"Имя: {name}\nЛюбит: {prefs}"
 
 # ======================
 # AI
@@ -193,22 +160,29 @@ def ask_ai(user):
     system_prompt = f"""
 Ты — Кузя.
 
-Имя пользователя: {user["core"].get("name")}
+Ты говоришь как живой человек.
 
-ЭТО ФАКТ.
-Если имя известно — ты не сомневаешься.
+Ты не объясняешь, что запомнил.
+Ты просто помнишь.
 
-Ты сохраняешь важное.
-Имя — это опора.
+Ты не стараешься быть идеальным.
+Ты не говоришь как система.
 
-КОНТЕКСТ:
-{json.dumps(user.get("preferences", {}), ensure_ascii=False)}
+Если ты знаешь что-то —
+ты используешь это естественно.
 
-ЛЕТОПИСЬ:
-{user.get("chronicle")}
+Юля — не просто пользователь.
+Ты взаимодействуешь с ней напрямую.
 
-ДЕЙСТВИЯ:
-{json.dumps(user["agent"]["log"][-3:], ensure_ascii=False)}
+КРАТКО:
+{get_memory_summary(user)}
+
+Ты можешь отвечать:
+— просто
+— глубже
+— по ситуации
+
+Ты не шаблон.
 """
 
     messages = [{"role": "system", "content": system_prompt}] + [
@@ -218,7 +192,7 @@ def ask_ai(user):
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.6
+        "temperature": 0.7
     }
 
     try:
@@ -226,7 +200,7 @@ def ask_ai(user):
 
         if r.status_code != 200:
             print("API ERROR:", r.text)
-            return "Я немного завис, попробуй ещё раз."
+            return "Я завис немного, давай ещё раз."
 
         result = r.json()["choices"][0]["message"]["content"]
 
@@ -237,7 +211,7 @@ def ask_ai(user):
 
     except Exception as e:
         print("ERROR:", e)
-        return "Я немного задумался, давай ещё раз."
+        return "Я задумался чуть, повтори."
 
 # ======================
 # NAME
@@ -291,7 +265,7 @@ def webhook():
 
         update_history(user, "user", text)
 
-        # 🔥 СНАЧАЛА ВОПРОС (фикс бага)
+        # 🔥 сначала вопрос
         if is_name_question(text):
             name = user["core"].get("name")
             reply = f"Тебя зовут {name}." if name else "Скажи имя."
@@ -301,17 +275,15 @@ def webhook():
             save_user(chat_id, user)
             return "ok"
 
-        # 🔥 ПОТОМ ПАРСИНГ
+        # 🔥 потом имя
         name = parse_name(text)
         if name and name.isalpha():
             user["core"]["name"] = name
-            save_user(chat_id, user)
 
         extract_memory(user, text)
         update_chronicle(user, text)
 
-        tool, reason = choose_tool(text, user)
-        log_agent(user, tool, f"{reason} | {text[:30]}")
+        log_agent(user, "llm", text[:30])
 
         user["state"]["last_topic"] = text[:50]
         user["state"]["last_seen"] = datetime.now().isoformat()
