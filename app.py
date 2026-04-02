@@ -6,6 +6,27 @@ from datetime import datetime
 app = Flask(__name__)
 
 # ======================
+# TEMP FIXES (чтобы не падало)
+# ======================
+
+OPENAI_API_KEY = "your_api_key_here"
+
+def get_memory_summary(user): return ""
+def is_duplicate(a,b): return False
+def is_processing(a): return False
+def get_user(a): return {"history": [], "chronicle": "", "core": {}, "state": {}, "agent": {}}
+def update_history(u,r,c): pass
+def send_reply(chat_id, text):
+    print("REPLY:", text)
+def save_user(a,b): pass
+def parse_name(t): return None
+def extract_memory(u,t): pass
+def update_chronicle(u,t): pass
+def log_agent(u,a,b): pass
+def reflect(u,a,b): pass
+def release_processing(a): pass
+
+# ======================
 # LEARNING
 # ======================
 def learn(user):
@@ -186,15 +207,6 @@ def webhook():
 
         update_history(user, "user", text)
 
-        if is_name_question(text):
-            name = user["core"].get("name")
-            reply = name if name else "Скажи имя."
-
-            send_reply(chat_id, reply)
-            update_history(user, "assistant", reply)
-            save_user(chat_id, user)
-            return "ok"
-
         name = parse_name(text)
         if name and name.isalpha():
             user["core"]["name"] = name
@@ -225,7 +237,7 @@ def webhook():
 
 
 # ======================
-# RUN (🔥 ОБЯЗАТЕЛЬНО)
+# RUN
 # ======================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
