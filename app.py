@@ -1,5 +1,12 @@
+from flask import Flask, request
+import requests
+import json
+from datetime import datetime
+
+app = Flask(__name__)
+
 # ======================
-# LEARNING (🔥 УЛУЧШЕНО)
+# LEARNING
 # ======================
 def learn(user):
     reflections = user.get("agent", {}).get("reflection", [])
@@ -153,13 +160,12 @@ def ask_ai(user):
 
 
 # ======================
-# WEBHOOK (🔥 С ЛОГАМИ)
+# WEBHOOK
 # ======================
 @app.route('/', methods=['POST'])
 def webhook():
     data = request.get_json()
 
-    # 🔥 ВОТ ЭТО ГЛАВНОЕ (для chat_id)
     print("🔥 UPDATE:", data)
 
     if "message" not in data:
@@ -216,3 +222,10 @@ def webhook():
         release_processing(chat_id)
 
     return "ok"
+
+
+# ======================
+# RUN (🔥 ОБЯЗАТЕЛЬНО)
+# ======================
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
