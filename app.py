@@ -13,7 +13,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # ======================
-# TEMP FIXES (чтобы не падало)
+# TEMP FIXES
 # ======================
 def get_memory_summary(user): return ""
 def is_duplicate(a,b): return False
@@ -36,6 +36,9 @@ def send_reply(chat_id, text):
         print("❌ NO TELEGRAM TOKEN")
         return
 
+    if not text:
+        text = "..."
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
     data = {
@@ -45,45 +48,13 @@ def send_reply(chat_id, text):
 
     try:
         r = requests.post(url, json=data)
-        print("📨 TG STATUS:", r.status_code, r.text)
+        print("📨 TG STATUS:", r.status_code)
+        print("📨 TG RESPONSE:", r.text)
     except Exception as e:
         print("❌ SEND ERROR:", e)
 
 # ======================
-# LEARNING
-# ======================
-def learn(user):
-    reflections = user.get("agent", {}).get("reflection", [])
-
-    if not reflections:
-        return
-
-    last = reflections[-1]
-    input_text = last.get("input", "").lower()
-    response = last.get("response", "").lower()
-
-    if len(response) < 15:
-        note = "Иногда стоит отвечать глубже"
-        if note not in user["chronicle"]:
-            user["chronicle"] += note + "\n"
-
-    if "хочешь" in response:
-        note = "Меньше шаблонных фраз, больше живого диалога"
-        if note not in user["chronicle"]:
-            user["chronicle"] += note + "\n"
-
-    if "не нравится" in input_text:
-        note = "Если Юле не нравится ответ — менять подход"
-        if note not in user["chronicle"]:
-            user["chronicle"] += note + "\n"
-
-    if "да" in response and len(response) < 40:
-        note = "Не соглашаться автоматически"
-        if note not in user["chronicle"]:
-            user["chronicle"] += note + "\n"
-
-# ======================
-# AI (временно простой ответ)
+# AI (тестовый ответ)
 # ======================
 def ask_ai(user):
     return "Я рядом."
@@ -97,11 +68,16 @@ def webhook():
 
     print("🔥 UPDATE:", data)
 
+    if not data:
+        return "ok"
+
     if "message" not in data:
         return "ok"
 
     chat_id = str(data["message"]["chat"]["id"])
     text = data["message"].get("text", "")
+
+    print("📩 TEXT:", text)
 
     try:
         user = get_user(chat_id)
