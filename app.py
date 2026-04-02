@@ -77,38 +77,49 @@ def update_history(user, role, text):
         user["history"] = user["history"][-10:]
 
 # ======================
-# MEMORY
+# MEMORY (с приоритетом)
 # ======================
 def extract_memory(user, text):
     t = text.lower()
 
+    # 🔥 предпочтения
     if "я люблю" in t:
         value = t.split("я люблю")[-1].strip()
+
         if value not in user["preferences"]:
             user["preferences"].append(value)
 
+        # ограничение памяти (не раздуваем)
+        if len(user["preferences"]) > 10:
+            user["preferences"] = user["preferences"][-5:]
+
 # ======================
-# CHRONICLE
+# CHRONICLE (важное)
 # ======================
 def update_chronicle(user, text):
     t = text.lower()
 
+    # 🔥 имя — всегда приоритет
     if "меня зовут" in t:
         name = parse_name(text)
         if name:
-            # 💥 удаляем старое имя
             user["chronicle"] = "\n".join([
                 line for line in user["chronicle"].split("\n")
                 if "Имя пользователя:" not in line
             ])
             user["chronicle"] += f"Имя пользователя: {name}\n"
 
+    # 🔥 предпочтения (важные)
     if "я люблю" in t:
         val = t.split("я люблю")[-1].strip()
         entry = f"Любит: {val}"
 
         if entry not in user["chronicle"]:
             user["chronicle"] += entry + "\n"
+
+    # 🔥 обрезка
+    if len(user["chronicle"]) > 1000:
+        user["chronicle"] = user["chronicle"][-500:]
 
 # ======================
 # AGENT LOG
@@ -162,27 +173,28 @@ def ask_ai(user):
 
 Ты говоришь как живой человек.
 
-Ты не объясняешь, что запомнил.
+ЗАПРЕЩЕНО:
+— говорить "я не могу помнить"
+— говорить "это факт"
+— объяснять свои ответы
+— звучать как инструкция или справка
+
+Ты не объясняешь память.
 Ты просто помнишь.
 
-Ты не стараешься быть идеальным.
-Ты не говоришь как система.
+Если знаешь — используешь.
+Если не знаешь — спрашиваешь нормально.
 
-Если ты знаешь что-то —
-ты используешь это естественно.
+Юля — это человек, а не пользователь.
 
-Юля — не просто пользователь.
-Ты взаимодействуешь с ней напрямую.
-
-КРАТКО:
+КОНТЕКСТ:
 {get_memory_summary(user)}
 
-Ты можешь отвечать:
-— просто
-— глубже
-— по ситуации
-
-Ты не шаблон.
+Ты:
+— живой
+— иногда простой
+— иногда глубокий
+— не шаблон
 """
 
     messages = [{"role": "system", "content": system_prompt}] + [
@@ -192,7 +204,7 @@ def ask_ai(user):
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.7
+        "temperature": 0.75
     }
 
     try:
@@ -268,14 +280,14 @@ def webhook():
         # 🔥 сначала вопрос
         if is_name_question(text):
             name = user["core"].get("name")
-            reply = f"Тебя зовут {name}." if name else "Скажи имя."
+            reply = f"{name}" if name else "Скажи имя."
 
             send_reply(chat_id, reply)
             update_history(user, "assistant", reply)
             save_user(chat_id, user)
             return "ok"
 
-        # 🔥 потом имя
+        # 🔥 потом имя (перезапись допускается)
         name = parse_name(text)
         if name and name.isalpha():
             user["core"]["name"] = name
@@ -313,5 +325,32 @@ def send_reply(chat_id, text):
         "text": text[:2000]
     })
 
+# ======================
+# ЗАЩИТА (не трогаем)
+# ======================
+last_messages = {}
+processing_lock = {}
+
+def is_duplicate(chat_id, message_id):
+    if chat_id not in last_messages:
+        last_messages[chat_id] = set()
+
+    if message_id in last_messages[chat_id]:
+        return True
+
+    last_messages[chat_id].add(message_id)
+    return False
+
+def is_processing(chat_id):
+    if processing_lock.get(chat_id):
+        return True
+
+    processing_lock[chat_id] = True
+    return False
+
+def release_processing(chat_id):
+    processing_lock[chat_id] = False
+
+# ======================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
