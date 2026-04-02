@@ -286,11 +286,11 @@ def webhook():
 
         update_history(user, "user", text)
 
-        # 🔥 ИМЯ (СРАЗУ СОХРАНЯЕМ)
+        # 🔥 сохраняем имя сразу
         name = parse_name(text)
         if name:
             user["core"]["name"] = name
-            save_user(chat_id, user)  # 💥 фикс
+            save_user(chat_id, user)
 
         extract_memory(user, text)
         update_chronicle(user, text)
@@ -301,9 +301,10 @@ def webhook():
         user["state"]["last_topic"] = text[:50]
         user["state"]["last_seen"] = datetime.now().isoformat()
 
-        # 🔥 ЖЁСТКАЯ ОСЬ
+        # 💥 ГЛАВНЫЙ ФИКС: читаем из базы
         if is_name_question(text):
-            name = user["core"].get("name")
+            fresh_user = get_user(chat_id)
+            name = fresh_user["core"].get("name")
 
             reply = f"Тебя зовут {name}." if name else "Скажи имя."
 
