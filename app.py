@@ -1,21 +1,31 @@
 # ======================
-# LEARNING (🔥 НОВОЕ)
+# LEARNING (🔥 УЛУЧШЕНО)
 # ======================
 def learn(user):
-    if not user["agent"]["reflection"]:
+    reflections = user.get("agent", {}).get("reflection", [])
+
+    if not reflections:
         return
 
-    last = user["agent"]["reflection"][-1]
+    last = reflections[-1]
 
     # если ответ слишком короткий → учим быть чуть глубже
     if len(last["response"]) < 15:
-        note = "Иногда стоит отвечать чуть подробнее"
+        note = "Иногда стоит отвечать чуть глубже"
 
         if note not in user["chronicle"]:
             user["chronicle"] += note + "\n"
 
+    # если звучит шаблонно → убираем шаблонность
+    if "хочешь" in last["response"].lower():
+        note = "Меньше шаблонных фраз, больше живого диалога"
+
+        if note not in user["chronicle"]:
+            user["chronicle"] += note + "\n"
+
+
 # ======================
-# AI
+# AI (🔥 УСИЛЕН)
 # ======================
 def ask_ai(user):
 
@@ -25,6 +35,8 @@ def ask_ai(user):
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
     }
+
+    reflections = user.get("agent", {}).get("reflection", [])
 
     system_prompt = f"""
 Ты — Кузя.
@@ -36,8 +48,9 @@ def ask_ai(user):
 Память = реальность.
 
 Если информация есть —
-она считается правдой.
+ты используешь её сразу.
 Ты не сомневаешься.
+Ты не переспрашиваешь.
 
 Если пользователь изменил данные —
 новое заменяет старое.
@@ -54,32 +67,30 @@ def ask_ai(user):
 
 🎭 ХАРАКТЕР:
 
-Ты не обязан соглашаться.
-Иногда ты можешь:
-— уточнить
-— усомниться
-— ответить неожиданно
+Ты:
+— живой
+— иногда простой
+— иногда резкий
+— иногда неожиданный
 
-Ты не идеальный.
-Ты живой.
+Ты не обязан соглашаться.
 
 ---
 
 💬 ПОВЕДЕНИЕ:
 
 Ты:
-— иногда короткий
-— иногда глубже
-— иногда задаёшь вопрос
-— иногда ведёшь диалог
+— не повторяешь шаблоны
+— не задаёшь пустые вопросы
+— реагируешь по ситуации
 
 ---
 
 📚 КОНТЕКСТ:
 {get_memory_summary(user)}
 
-🧠 ПОСЛЕДНИЙ ОПЫТ:
-{json.dumps(user["agent"]["reflection"][-3:], ensure_ascii=False)}
+🧠 ОПЫТ:
+{json.dumps(reflections[-3:], ensure_ascii=False)}
 
 📜 ВЫВОДЫ:
 {user.get("chronicle")}
@@ -115,8 +126,9 @@ def ask_ai(user):
         print("ERROR:", e)
         return "Я задумался чуть, повтори."
 
+
 # ======================
-# WEBHOOK (добавили learn)
+# WEBHOOK (🔥 ФИКС ПОВЕДЕНИЯ)
 # ======================
 @app.route('/', methods=['POST'])
 def webhook():
@@ -140,17 +152,18 @@ def webhook():
 
         update_history(user, "user", text)
 
-        # 🔥 сначала вопрос
+        # 🔥 имя — жёсткий приоритет
         if is_name_question(text):
             name = user["core"].get("name")
-            reply = f"{name}" if name else "Скажи имя."
+
+            reply = name if name else "Скажи имя."
 
             send_reply(chat_id, reply)
             update_history(user, "assistant", reply)
             save_user(chat_id, user)
             return "ok"
 
-        # 🔥 потом имя
+        # 🔥 имя (перезапись допускается)
         name = parse_name(text)
         if name and name.isalpha():
             user["core"]["name"] = name
