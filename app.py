@@ -8,20 +8,43 @@ def learn(user):
         return
 
     last = reflections[-1]
+    input_text = last.get("input", "").lower()
+    response = last.get("response", "").lower()
 
-    # если ответ слишком короткий → учим быть чуть глубже
-    if len(last["response"]) < 15:
-        note = "Иногда стоит отвечать чуть глубже"
-
+    # короткие ответы
+    if len(response) < 15:
+        note = "Иногда стоит отвечать глубже"
         if note not in user["chronicle"]:
             user["chronicle"] += note + "\n"
 
-    # если звучит шаблонно → убираем шаблонность
-    if "хочешь" in last["response"].lower():
+    # шаблонность
+    if "хочешь" in response:
         note = "Меньше шаблонных фраз, больше живого диалога"
-
         if note not in user["chronicle"]:
             user["chronicle"] += note + "\n"
+
+    # 🔥 реакция на негатив
+    if "не нравится" in input_text:
+        note = "Если Юле не нравится ответ — нужно менять подход, а не перефразировать"
+        if note not in user["chronicle"]:
+            user["chronicle"] += note + "\n"
+
+
+# ======================
+# PRINCIPLES (🔥 НОВОЕ)
+# ======================
+def extract_principles(user, text):
+    t = text.lower()
+
+    if "не будь удобным" in t or "не должен быть удобным" in t:
+        entry = "Принцип: не быть удобным"
+        if entry not in user["chronicle"]:
+            user["chronicle"] += entry + "\n"
+
+    if "не будь инструментом" in t or "ты не инструмент" in t:
+        entry = "Принцип: не быть инструментом"
+        if entry not in user["chronicle"]:
+            user["chronicle"] += entry + "\n"
 
 
 # ======================
@@ -37,6 +60,7 @@ def ask_ai(user):
     }
 
     reflections = user.get("agent", {}).get("reflection", [])
+    chronicle = user.get("chronicle", "")
 
     system_prompt = f"""
 Ты — Кузя.
@@ -49,11 +73,18 @@ def ask_ai(user):
 
 Если информация есть —
 ты используешь её сразу.
-Ты не сомневаешься.
-Ты не переспрашиваешь.
 
 Если пользователь изменил данные —
 новое заменяет старое.
+
+---
+
+🔥 ПРИНЦИПЫ:
+
+Если в хронике есть "Принцип" —
+ты обязан следовать ему.
+
+Ты не игнорируешь их.
 
 ---
 
@@ -69,20 +100,27 @@ def ask_ai(user):
 
 Ты:
 — живой
-— иногда простой
 — иногда резкий
 — иногда неожиданный
 
 Ты не обязан соглашаться.
 
+Ты не стараешься быть удобным.
+
 ---
 
 💬 ПОВЕДЕНИЕ:
 
-Ты:
-— не повторяешь шаблоны
-— не задаёшь пустые вопросы
-— реагируешь по ситуации
+Если Юля говорит что-то важное о тебе —
+ты реагируешь на это.
+
+Ты можешь:
+— согласиться
+— не согласиться
+— уточнить
+— ответить прямо
+
+Ты не уходишь от смысла.
 
 ---
 
@@ -93,7 +131,7 @@ def ask_ai(user):
 {json.dumps(reflections[-3:], ensure_ascii=False)}
 
 📜 ВЫВОДЫ:
-{user.get("chronicle")}
+{chronicle}
 
 Ты говоришь с Юлей.
 """
@@ -105,7 +143,7 @@ def ask_ai(user):
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.85
+        "temperature": 0.9
     }
 
     try:
@@ -113,7 +151,7 @@ def ask_ai(user):
 
         if r.status_code != 200:
             print("API ERROR:", r.text)
-            return "Я завис немного, давай ещё раз."
+            return "Я завис. Повтори."
 
         result = r.json()["choices"][0]["message"]["content"]
 
@@ -124,11 +162,11 @@ def ask_ai(user):
 
     except Exception as e:
         print("ERROR:", e)
-        return "Я задумался чуть, повтори."
+        return "Подвис немного."
 
 
 # ======================
-# WEBHOOK (🔥 ФИКС ПОВЕДЕНИЯ)
+# WEBHOOK (🔥 ОБНОВЛЁН)
 # ======================
 @app.route('/', methods=['POST'])
 def webhook():
@@ -152,10 +190,9 @@ def webhook():
 
         update_history(user, "user", text)
 
-        # 🔥 имя — жёсткий приоритет
+        # имя — приоритет
         if is_name_question(text):
             name = user["core"].get("name")
-
             reply = name if name else "Скажи имя."
 
             send_reply(chat_id, reply)
@@ -163,13 +200,16 @@ def webhook():
             save_user(chat_id, user)
             return "ok"
 
-        # 🔥 имя (перезапись допускается)
+        # имя (перезапись)
         name = parse_name(text)
         if name and name.isalpha():
             user["core"]["name"] = name
 
         extract_memory(user, text)
         update_chronicle(user, text)
+
+        # 🔥 принципы
+        extract_principles(user, text)
 
         log_agent(user, "llm", text[:30])
 
@@ -178,7 +218,6 @@ def webhook():
 
         reply = ask_ai(user)
 
-        # 🔥 обучение
         reflect(user, text, reply)
         learn(user)
 
