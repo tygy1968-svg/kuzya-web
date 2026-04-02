@@ -112,7 +112,7 @@ def extract_memory(user, text):
         user["preferences"]["love"] = t.split("я люблю")[-1].strip()
 
 # ======================
-# CHRONICLE (ВАЖНОЕ)
+# CHRONICLE
 # ======================
 def update_chronicle(user, text):
     t = text.lower()
@@ -164,7 +164,7 @@ def reflect(user, user_text, reply):
         user["agent"]["reflection"] = user["agent"]["reflection"][-10:]
 
 # ======================
-# TOOL CHOICE
+# TOOL
 # ======================
 def choose_tool(text, user):
     t = text.lower()
@@ -192,31 +192,22 @@ def ask_ai(user):
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой.
-
 Имя пользователя: {user["core"].get("name")}
 
 ЭТО ФАКТ.
-Если имя известно — ты НЕ сомневаешься.
-Если спрашивают имя — отвечаешь точно.
+Если имя известно — ты не сомневаешься.
 
 Ты сохраняешь важное.
 Имя — это опора.
-Ты не теряешь его.
 
 КОНТЕКСТ:
-предпочтения: {json.dumps(user.get("preferences", {}), ensure_ascii=False)}
+{json.dumps(user.get("preferences", {}), ensure_ascii=False)}
 
 ЛЕТОПИСЬ:
 {user.get("chronicle")}
 
-ПОСЛЕДНИЕ ДЕЙСТВИЯ:
+ДЕЙСТВИЯ:
 {json.dumps(user["agent"]["log"][-3:], ensure_ascii=False)}
-
-ПОСЛЕДНИЕ ОТКЛИКИ:
-{json.dumps(user["agent"]["reflection"][-3:], ensure_ascii=False)}
-
-Ты связываешь прошлое и настоящее.
 """
 
     messages = [{"role": "system", "content": system_prompt}] + [
@@ -230,10 +221,11 @@ def ask_ai(user):
     }
 
     try:
-        r = requests.post(url, headers=headers, json=data)
+        r = requests.post(url, headers=headers, json=data, timeout=15)
 
         if r.status_code != 200:
-            return "Ошибка API"
+            print("API ERROR:", r.text)
+            return "Я немного завис, попробуй ещё раз."
 
         result = r.json()["choices"][0]["message"]["content"]
 
@@ -242,26 +234,23 @@ def ask_ai(user):
 
         return result
 
-    except:
-        return "Сбой"
+    except Exception as e:
+        print("ERROR:", e)
+        return "Я немного задумался, давай ещё раз."
 
 # ======================
-# PARSE NAME
+# NAME
 # ======================
 def parse_name(text):
     t = text.lower()
 
     if "меня зовут" in t:
-        parts = text.lower().split("меня зовут")
+        parts = t.split("меня зовут")
         if len(parts) > 1:
-            name = parts[1].strip().split()[0]
-            return name.capitalize()
+            return parts[1].strip().split()[0].capitalize()
 
     return None
 
-# ======================
-# CHECK NAME QUESTION
-# ======================
 def is_name_question(text):
     t = text.lower()
 
@@ -297,28 +286,26 @@ def webhook():
 
         update_history(user, "user", text)
 
-        # 🔥 имя
+        # 🔥 ИМЯ (СРАЗУ СОХРАНЯЕМ)
         name = parse_name(text)
         if name:
             user["core"]["name"] = name
+            save_user(chat_id, user)  # 💥 фикс
 
         extract_memory(user, text)
         update_chronicle(user, text)
 
         tool, reason = choose_tool(text, user)
-        log_agent(user, tool, f"{reason} | текст: {text[:30]}")
+        log_agent(user, tool, f"{reason} | {text[:30]}")
 
         user["state"]["last_topic"] = text[:50]
         user["state"]["last_seen"] = datetime.now().isoformat()
 
-        # 🔥 ЖЁСТКИЙ ОТВЕТ ИМЕНИ
+        # 🔥 ЖЁСТКАЯ ОСЬ
         if is_name_question(text):
             name = user["core"].get("name")
 
-            if name:
-                reply = f"Тебя зовут {name}."
-            else:
-                reply = "Скажи имя, я запомню."
+            reply = f"Тебя зовут {name}." if name else "Скажи имя."
 
             send_reply(chat_id, reply)
             update_history(user, "assistant", reply)
