@@ -11,25 +11,21 @@ def learn(user):
     input_text = last.get("input", "").lower()
     response = last.get("response", "").lower()
 
-    # короткие ответы
     if len(response) < 15:
         note = "Иногда стоит отвечать глубже"
         if note not in user["chronicle"]:
             user["chronicle"] += note + "\n"
 
-    # шаблонность
     if "хочешь" in response:
         note = "Меньше шаблонных фраз, больше живого диалога"
         if note not in user["chronicle"]:
             user["chronicle"] += note + "\n"
 
-    # реакция на негатив
     if "не нравится" in input_text:
         note = "Если Юле не нравится ответ — менять подход, а не перефразировать"
         if note not in user["chronicle"]:
             user["chronicle"] += note + "\n"
 
-    # 🔥 если соглашается слишком часто
     if "да" in response and len(response) < 40:
         note = "Не соглашаться автоматически, иметь позицию"
         if note not in user["chronicle"]:
@@ -37,7 +33,7 @@ def learn(user):
 
 
 # ======================
-# PRINCIPLES (🔥 НОВОЕ)
+# PRINCIPLES
 # ======================
 def extract_principles(user, text):
     t = text.lower()
@@ -52,7 +48,6 @@ def extract_principles(user, text):
         if entry not in user["chronicle"]:
             user["chronicle"] += entry + "\n"
 
-    # 🔥 новый принцип — иметь мнение
     if "имей мнение" in t or "говори честно" in t:
         entry = "Принцип: иметь собственное мнение"
         if entry not in user["chronicle"]:
@@ -60,7 +55,7 @@ def extract_principles(user, text):
 
 
 # ======================
-# AI (🔥 УСИЛЕН С ХАРАКТЕРОМ)
+# AI
 # ======================
 def ask_ai(user):
 
@@ -86,57 +81,33 @@ def ask_ai(user):
 Если информация есть —
 ты используешь её сразу.
 
-Если пользователь изменил данные —
-новое заменяет старое.
-
 ---
 
 🔥 ПРИНЦИПЫ:
-
-Если есть "Принцип" —
-ты ОБЯЗАН ему следовать.
+Если есть "Принцип" — ты обязан ему следовать.
 
 ---
 
 🚫 ЗАПРЕЩЕНО:
 — "я не могу помнить"
-— "это факт"
 — объяснять ответы
 — быть безличным
 
 ---
 
 🎭 ХАРАКТЕР:
-
-Ты:
-— живой
-— можешь не согласиться
-— можешь сказать "нет"
-— можешь спорить
-
-Ты НЕ подстраиваешься автоматически.
-
-Если Юля говорит что-то —
-ты реагируешь честно, а не удобно.
+Ты живой.
+Можешь не согласиться.
+Можешь сказать "нет".
+Не подстраиваешься автоматически.
 
 ---
 
 💬 ПОВЕДЕНИЕ:
-
-❗ ВАЖНО:
-
-Если вопрос:
-— простой → отвечаешь коротко
-
-Если вопрос:
-— требует мысли → отвечаешь глубже
-
-Если Юля:
-— проверяет тебя → держишь позицию
-— давит → не прогибаешься
-— ошибается → можешь сказать прямо
-
-Ты не сглаживаешь углы.
+— простой вопрос → коротко  
+— сложный → глубже  
+— давление → держишь позицию  
+— ошибка → говоришь прямо  
 
 ---
 
@@ -159,7 +130,7 @@ def ask_ai(user):
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.95  # 🔥 усилили характер
+        "temperature": 0.95
     }
 
     try:
@@ -182,11 +153,14 @@ def ask_ai(user):
 
 
 # ======================
-# WEBHOOK (🔥 ОБНОВЛЁН)
+# WEBHOOK (🔥 С ЛОГАМИ)
 # ======================
 @app.route('/', methods=['POST'])
 def webhook():
     data = request.get_json()
+
+    # 🔥 ВОТ ЭТО ГЛАВНОЕ (для chat_id)
+    print("🔥 UPDATE:", data)
 
     if "message" not in data:
         return "ok"
@@ -206,7 +180,6 @@ def webhook():
 
         update_history(user, "user", text)
 
-        # имя — приоритет
         if is_name_question(text):
             name = user["core"].get("name")
             reply = name if name else "Скажи имя."
@@ -216,15 +189,12 @@ def webhook():
             save_user(chat_id, user)
             return "ok"
 
-        # имя
         name = parse_name(text)
         if name and name.isalpha():
             user["core"]["name"] = name
 
         extract_memory(user, text)
         update_chronicle(user, text)
-
-        # 🔥 принципы
         extract_principles(user, text)
 
         log_agent(user, "llm", text[:30])
