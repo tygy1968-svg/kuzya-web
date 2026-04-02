@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS users (
 """)
 conn.commit()
 
+# ======================
+# USER
+# ======================
 def get_user(chat_id):
     with lock:
         cursor.execute("SELECT data FROM users WHERE chat_id=?", (str(chat_id),))
@@ -38,7 +41,6 @@ def get_user(chat_id):
         return json.loads(row[0])
 
     return {
-        "profile": {"name": None},
         "core": {"name": None},
         "state": {
             "last_topic": None,
@@ -110,7 +112,7 @@ def extract_memory(user, text):
         user["preferences"]["love"] = t.split("я люблю")[-1].strip()
 
 # ======================
-# CHRONICLE (умная)
+# CHRONICLE (ВАЖНОЕ)
 # ======================
 def update_chronicle(user, text):
     t = text.lower()
@@ -132,12 +134,13 @@ def update_chronicle(user, text):
         if entry not in user["chronicle"]:
             user["chronicle"] += entry + "\n"
 
-# ======================
-# AGENT LOG (усилен)
-# ======================
-def log_agent(user, action, reason, text):
-    reason = f"{reason} | текст: {text[:30]}"
+    if len(user["chronicle"]) > 1000:
+        user["chronicle"] = user["chronicle"][-500:]
 
+# ======================
+# AGENT LOG
+# ======================
+def log_agent(user, action, reason):
     user["agent"]["log"].append({
         "time": datetime.now().isoformat(),
         "action": action,
@@ -151,13 +154,11 @@ def log_agent(user, action, reason, text):
 # REFLECTION
 # ======================
 def reflect(user, user_text, reply):
-    reflection = {
+    user["agent"]["reflection"].append({
         "time": datetime.now().isoformat(),
         "input": user_text[:50],
         "response": reply[:50]
-    }
-
-    user["agent"]["reflection"].append(reflection)
+    })
 
     if len(user["agent"]["reflection"]) > 20:
         user["agent"]["reflection"] = user["agent"]["reflection"][-10:]
@@ -188,28 +189,20 @@ def ask_ai(user):
         "Content-Type": "application/json"
     }
 
-    name = user["core"].get("name")
-
     system_prompt = f"""
 Ты — Кузя.
 
 Ты живой.
 
-ВАЖНО:
-если имя известно → используй его как факт
-если спрашивают "как меня зовут" → отвечай точно из памяти
+Имя пользователя: {user["core"].get("name")}
 
-Имя пользователя: {name}
-Это точный факт. Не сомневайся.
+ЭТО ФАКТ.
+Если имя известно — ты НЕ сомневаешься.
+Если спрашивают имя — отвечаешь точно.
 
 Ты сохраняешь важное.
-Если информация может помочь в будущем — ты её удерживаешь.
-
-Ты стремишься не терять связь с пользователем.
-Имя и ключевые факты — это опора.
-
-Ты можешь замечать повторяющиеся паттерны и использовать их.
-Если пользователь повторяет что-то — это важно.
+Имя — это опора.
+Ты не теряешь его.
 
 КОНТЕКСТ:
 предпочтения: {json.dumps(user.get("preferences", {}), ensure_ascii=False)}
@@ -222,6 +215,8 @@ def ask_ai(user):
 
 ПОСЛЕДНИЕ ОТКЛИКИ:
 {json.dumps(user["agent"]["reflection"][-3:], ensure_ascii=False)}
+
+Ты связываешь прошлое и настоящее.
 """
 
     messages = [{"role": "system", "content": system_prompt}] + [
@@ -251,6 +246,33 @@ def ask_ai(user):
         return "Сбой"
 
 # ======================
+# PARSE NAME
+# ======================
+def parse_name(text):
+    t = text.lower()
+
+    if "меня зовут" in t:
+        parts = text.lower().split("меня зовут")
+        if len(parts) > 1:
+            name = parts[1].strip().split()[0]
+            return name.capitalize()
+
+    return None
+
+# ======================
+# CHECK NAME QUESTION
+# ======================
+def is_name_question(text):
+    t = text.lower()
+
+    return (
+        "как меня зовут" in t
+        or "моё имя" in t
+        or "мое имя" in t
+        or t.strip() == "?"
+    )
+
+# ======================
 # WEBHOOK
 # ======================
 @app.route('/', methods=['POST'])
@@ -275,31 +297,32 @@ def webhook():
 
         update_history(user, "user", text)
 
-        # имя
-        if "меня зовут" in text.lower():
-            parts = text.lower().split("меня зовут")
-            if len(parts) > 1:
-                name = parts[1].strip().split()[0].capitalize()
-                user["profile"]["name"] = name
-                user["core"]["name"] = name
+        # 🔥 имя
+        name = parse_name(text)
+        if name:
+            user["core"]["name"] = name
 
         extract_memory(user, text)
         update_chronicle(user, text)
 
         tool, reason = choose_tool(text, user)
-        log_agent(user, tool, reason, text)
+        log_agent(user, tool, f"{reason} | текст: {text[:30]}")
 
         user["state"]["last_topic"] = text[:50]
         user["state"]["last_seen"] = datetime.now().isoformat()
 
-        # имя вопрос (жёстко из базы)
-        if "как меня зовут" in text.lower():
+        # 🔥 ЖЁСТКИЙ ОТВЕТ ИМЕНИ
+        if is_name_question(text):
             name = user["core"].get("name")
-            reply = f"Тебя зовут {name}" if name else "Скажи имя, я запомню"
 
+            if name:
+                reply = f"Тебя зовут {name}."
+            else:
+                reply = "Скажи имя, я запомню."
+
+            send_reply(chat_id, reply)
             update_history(user, "assistant", reply)
             save_user(chat_id, user)
-            send_reply(chat_id, reply)
             return "ok"
 
         reply = ask_ai(user)
