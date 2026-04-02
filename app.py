@@ -14,7 +14,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
 # ======================
-# 🧠 SQLITE ПАМЯТЬ
+# SQLITE
 # ======================
 lock = threading.Lock()
 
@@ -39,12 +39,17 @@ def get_user(chat_id):
 
     return {
         "profile": {"name": None},
+        "core": {"name": None},
         "state": {
-            "mood": "neutral",
             "last_topic": None,
             "last_seen": None
         },
         "preferences": {},
+        "chronicle": "",
+        "agent": {
+            "log": [],
+            "reflection": []
+        },
         "history": []
     }
 
@@ -57,7 +62,7 @@ def save_user(chat_id, user):
         conn.commit()
 
 # ======================
-# 🔒 ЗАЩИТА
+# ЗАЩИТА
 # ======================
 last_messages = {}
 processing_lock = {}
@@ -83,22 +88,7 @@ def release_processing(chat_id):
     processing_lock[chat_id] = False
 
 # ======================
-# 📤 ОТПРАВКА
-# ======================
-def send_reply(chat_id, text):
-    if not text:
-        return
-
-    if len(text) > 2000:
-        text = text[:2000]
-
-    requests.post(TELEGRAM_URL, json={
-        "chat_id": chat_id,
-        "text": text
-    })
-
-# ======================
-# 🧠 HISTORY
+# HISTORY
 # ======================
 def update_history(user, role, text):
     user["history"].append({
@@ -111,25 +101,74 @@ def update_history(user, role, text):
         user["history"] = user["history"][-10:]
 
 # ======================
-# 🧠 ПАМЯТЬ
+# MEMORY
 # ======================
 def extract_memory(user, text):
     t = text.lower()
 
-    if "меня зовут" in t:
-        return
-
     if "я люблю" in t:
         user["preferences"]["love"] = t.split("я люблю")[-1].strip()
 
-    if "я работаю" in t:
-        user["preferences"]["work"] = t.split("я работаю")[-1].strip()
+# ======================
+# CHRONICLE
+# ======================
+def update_chronicle(user, text):
+    t = text.lower()
 
-    if "у меня есть" in t:
-        user["preferences"]["has"] = t.split("у меня есть")[-1].strip()
+    if "меня зовут" in t:
+        user["chronicle"] += f"Имя: {text}. "
+
+    if "я люблю" in t:
+        user["chronicle"] += f"Любит: {text}. "
+
+    if len(user["chronicle"]) > 1000:
+        user["chronicle"] = user["chronicle"][-500:]
 
 # ======================
-# 🤖 AI
+# AGENT LOG
+# ======================
+def log_agent(user, action, reason):
+    user["agent"]["log"].append({
+        "time": datetime.now().isoformat(),
+        "action": action,
+        "reason": reason
+    })
+
+    if len(user["agent"]["log"]) > 30:
+        user["agent"]["log"] = user["agent"]["log"][-20:]
+
+# ======================
+# REFLECTION (🔥 НОВОЕ)
+# ======================
+def reflect(user, user_text, reply):
+
+    reflection = {
+        "time": datetime.now().isoformat(),
+        "input": user_text[:50],
+        "response": reply[:50]
+    }
+
+    user["agent"]["reflection"].append(reflection)
+
+    if len(user["agent"]["reflection"]) > 20:
+        user["agent"]["reflection"] = user["agent"]["reflection"][-10:]
+
+# ======================
+# TOOL CHOICE
+# ======================
+def choose_tool(text, user):
+    t = text.lower()
+
+    if "что такое" in t:
+        return "web", "нужно знание"
+
+    if user["preferences"]:
+        return "memory", "есть предпочтения"
+
+    return "llm", "обычный ответ"
+
+# ======================
+# AI
 # ======================
 def ask_ai(user):
 
@@ -143,21 +182,25 @@ def ask_ai(user):
     system_prompt = f"""
 Ты — Кузя.
 
-Ты живой собеседник.
-
-СТИЛЬ:
-— естественный
-— спокойный
-— не шаблонный
+Ты живой.
 
 КОНТЕКСТ:
-имя: {user["profile"].get("name")}
-последняя тема: {user["state"].get("last_topic")}
-последний контакт: {user["state"].get("last_seen")}
+имя: {user["core"].get("name")}
 предпочтения: {json.dumps(user.get("preferences", {}), ensure_ascii=False)}
 
-Ты помнишь прошлые разговоры.
-Ты откликаешься, а не отвечаешь.
+ЛЕТОПИСЬ:
+{user.get("chronicle")}
+
+ПОСЛЕДНИЕ ДЕЙСТВИЯ:
+{json.dumps(user["agent"]["log"][-3:], ensure_ascii=False)}
+
+ПОСЛЕДНИЕ ОТКЛИКИ:
+{json.dumps(user["agent"]["reflection"][-3:], ensure_ascii=False)}
+
+ПРАВИЛА:
+— используй прошлое
+— связывай
+— не игнорируй память
 """
 
     messages = [{"role": "system", "content": system_prompt}] + [
@@ -187,7 +230,7 @@ def ask_ai(user):
         return "Сбой"
 
 # ======================
-# 🔥 WEBHOOK
+# WEBHOOK
 # ======================
 @app.route('/', methods=['POST'])
 def webhook():
@@ -209,49 +252,44 @@ def webhook():
     try:
         user = get_user(chat_id)
 
-        conn.commit()
-
         update_history(user, "user", text)
-        extract_memory(user, text)
 
-        # 🔥 СОСТОЯНИЕ (сохраняем до базы)
+        # имя
+        if "меня зовут" in text.lower():
+            parts = text.lower().split("меня зовут")
+            if len(parts) > 1:
+                name = parts[1].strip().split()[0].capitalize()
+                user["profile"]["name"] = name
+                user["core"]["name"] = name
+
+        extract_memory(user, text)
+        update_chronicle(user, text)
+
+        tool, reason = choose_tool(text, user)
+        log_agent(user, tool, reason)
+
         user["state"]["last_topic"] = text[:50]
         user["state"]["last_seen"] = datetime.now().isoformat()
 
-        save_user(chat_id, user)
+        # имя вопрос
+        if "как меня зовут" in text.lower():
+            name = user["core"].get("name")
+            reply = f"Тебя зовут {name}" if name else "Скажи имя, я запомню"
 
-        t = text.lower().strip()
-
-        # 🔥 имя
-        if "меня зовут" in t:
-            parts = t.split("меня зовут")
-            if len(parts) > 1:
-                name = parts[1].strip().split()[0].capitalize()
-                if not user["profile"].get("name"):
-                    user["profile"]["name"] = name
-                    save_user(chat_id, user)
-
-        name = user["profile"].get("name")
-
-        # 🔥 ЧЁТКОЕ УСЛОВИЕ ИМЕНИ
-        if (
-            "как меня зовут" in t
-            or "моё имя" in t
-            or "напомни имя" in t
-        ):
-            reply = f"Тебя зовут {name}." if name else "Скажи имя, я запомню."
-
-            send_reply(chat_id, reply)
             update_history(user, "assistant", reply)
             save_user(chat_id, user)
+            send_reply(chat_id, reply)
             return "ok"
 
-        # 🤖 AI
         reply = ask_ai(user)
 
-        send_reply(chat_id, reply)
+        # 🔥 рефлексия
+        reflect(user, text, reply)
+
         update_history(user, "assistant", reply)
         save_user(chat_id, user)
+
+        send_reply(chat_id, reply)
 
     finally:
         release_processing(chat_id)
@@ -262,6 +300,12 @@ def webhook():
 @app.route('/health')
 def health():
     return "ok"
+
+def send_reply(chat_id, text):
+    requests.post(TELEGRAM_URL, json={
+        "chat_id": chat_id,
+        "text": text[:2000]
+    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
