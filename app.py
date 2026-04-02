@@ -19,10 +19,15 @@ def send_reply(chat_id, text):
         "text": text
     }
 
-    r = requests.post(url, data=data)
+    print("SENDING TO:", chat_id)
+    print("TEXT:", text)
 
-    print("STATUS:", r.status_code)
-    print("RESPONSE:", r.text)
+    try:
+        r = requests.post(url, json=data)
+        print("STATUS:", r.status_code)
+        print("RESPONSE:", r.text)
+    except Exception as e:
+        print("ERROR:", e)
 
 
 @app.route('/', methods=['POST'])
@@ -40,6 +45,7 @@ def webhook():
     chat_id = data["message"]["chat"]["id"]
     text = data["message"].get("text", "")
 
+    print("CHAT_ID:", chat_id)
     print("TEXT:", text)
 
     send_reply(chat_id, "Ты написала: " + text)
