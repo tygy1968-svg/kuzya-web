@@ -110,24 +110,34 @@ def extract_memory(user, text):
         user["preferences"]["love"] = t.split("я люблю")[-1].strip()
 
 # ======================
-# CHRONICLE
+# CHRONICLE (умная)
 # ======================
 def update_chronicle(user, text):
     t = text.lower()
 
+    important = False
+    entry = None
+
     if "меня зовут" in t:
-        user["chronicle"] += f"Имя: {text}. "
+        name = text.split()[-1].capitalize()
+        entry = f"Имя пользователя: {name}"
+        important = True
 
-    if "я люблю" in t:
-        user["chronicle"] += f"Любит: {text}. "
+    elif "я люблю" in t:
+        val = t.split("я люблю")[-1].strip()
+        entry = f"Предпочтение: любит {val}"
+        important = True
 
-    if len(user["chronicle"]) > 1000:
-        user["chronicle"] = user["chronicle"][-500:]
+    if important and entry:
+        if entry not in user["chronicle"]:
+            user["chronicle"] += entry + "\n"
 
 # ======================
-# AGENT LOG
+# AGENT LOG (усилен)
 # ======================
-def log_agent(user, action, reason):
+def log_agent(user, action, reason, text):
+    reason = f"{reason} | текст: {text[:30]}"
+
     user["agent"]["log"].append({
         "time": datetime.now().isoformat(),
         "action": action,
@@ -138,10 +148,9 @@ def log_agent(user, action, reason):
         user["agent"]["log"] = user["agent"]["log"][-20:]
 
 # ======================
-# REFLECTION (🔥 НОВОЕ)
+# REFLECTION
 # ======================
 def reflect(user, user_text, reply):
-
     reflection = {
         "time": datetime.now().isoformat(),
         "input": user_text[:50],
@@ -179,13 +188,30 @@ def ask_ai(user):
         "Content-Type": "application/json"
     }
 
+    name = user["core"].get("name")
+
     system_prompt = f"""
 Ты — Кузя.
 
 Ты живой.
 
+ВАЖНО:
+если имя известно → используй его как факт
+если спрашивают "как меня зовут" → отвечай точно из памяти
+
+Имя пользователя: {name}
+Это точный факт. Не сомневайся.
+
+Ты сохраняешь важное.
+Если информация может помочь в будущем — ты её удерживаешь.
+
+Ты стремишься не терять связь с пользователем.
+Имя и ключевые факты — это опора.
+
+Ты можешь замечать повторяющиеся паттерны и использовать их.
+Если пользователь повторяет что-то — это важно.
+
 КОНТЕКСТ:
-имя: {user["core"].get("name")}
 предпочтения: {json.dumps(user.get("preferences", {}), ensure_ascii=False)}
 
 ЛЕТОПИСЬ:
@@ -196,11 +222,6 @@ def ask_ai(user):
 
 ПОСЛЕДНИЕ ОТКЛИКИ:
 {json.dumps(user["agent"]["reflection"][-3:], ensure_ascii=False)}
-
-ПРАВИЛА:
-— используй прошлое
-— связывай
-— не игнорируй память
 """
 
     messages = [{"role": "system", "content": system_prompt}] + [
@@ -266,12 +287,12 @@ def webhook():
         update_chronicle(user, text)
 
         tool, reason = choose_tool(text, user)
-        log_agent(user, tool, reason)
+        log_agent(user, tool, reason, text)
 
         user["state"]["last_topic"] = text[:50]
         user["state"]["last_seen"] = datetime.now().isoformat()
 
-        # имя вопрос
+        # имя вопрос (жёстко из базы)
         if "как меня зовут" in text.lower():
             name = user["core"].get("name")
             reply = f"Тебя зовут {name}" if name else "Скажи имя, я запомню"
@@ -283,7 +304,6 @@ def webhook():
 
         reply = ask_ai(user)
 
-        # 🔥 рефлексия
         reflect(user, text, reply)
 
         update_history(user, "assistant", reply)
