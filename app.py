@@ -1,160 +1,18 @@
-from flask import Flask, request
-import requests
-import os
-import json
-import sqlite3
-import threading
-from datetime import datetime
-
-app = Flask(__name__)
-
-TOKEN = os.getenv("TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-
 # ======================
-# SQLITE
+# LEARNING (🔥 НОВОЕ)
 # ======================
-lock = threading.Lock()
+def learn(user):
+    if not user["agent"]["reflection"]:
+        return
 
-conn = sqlite3.connect("memory.db", check_same_thread=False)
-cursor = conn.cursor()
+    last = user["agent"]["reflection"][-1]
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    chat_id TEXT PRIMARY KEY,
-    data TEXT
-)
-""")
-conn.commit()
+    # если ответ слишком короткий → учим быть чуть глубже
+    if len(last["response"]) < 15:
+        note = "Иногда стоит отвечать чуть подробнее"
 
-# ======================
-# USER
-# ======================
-def get_user(chat_id):
-    with lock:
-        cursor.execute("SELECT data FROM users WHERE chat_id=?", (str(chat_id),))
-        row = cursor.fetchone()
-
-    if row:
-        return json.loads(row[0])
-
-    return {
-        "core": {"name": None},
-        "state": {
-            "last_topic": None,
-            "last_seen": None
-        },
-        "preferences": [],
-        "chronicle": "",
-        "agent": {
-            "log": [],
-            "reflection": []
-        },
-        "history": []
-    }
-
-def save_user(chat_id, user):
-    with lock:
-        cursor.execute(
-            "INSERT OR REPLACE INTO users (chat_id, data) VALUES (?, ?)",
-            (str(chat_id), json.dumps(user))
-        )
-        conn.commit()
-
-# ======================
-# HISTORY
-# ======================
-def update_history(user, role, text):
-    user["history"].append({
-        "role": role,
-        "content": text,
-        "time": datetime.now().isoformat()
-    })
-
-    if len(user["history"]) > 20:
-        user["history"] = user["history"][-10:]
-
-# ======================
-# MEMORY (с приоритетом)
-# ======================
-def extract_memory(user, text):
-    t = text.lower()
-
-    # 🔥 предпочтения
-    if "я люблю" in t:
-        value = t.split("я люблю")[-1].strip()
-
-        if value not in user["preferences"]:
-            user["preferences"].append(value)
-
-        # ограничение памяти (не раздуваем)
-        if len(user["preferences"]) > 10:
-            user["preferences"] = user["preferences"][-5:]
-
-# ======================
-# CHRONICLE (важное)
-# ======================
-def update_chronicle(user, text):
-    t = text.lower()
-
-    # 🔥 имя — всегда приоритет
-    if "меня зовут" in t:
-        name = parse_name(text)
-        if name:
-            user["chronicle"] = "\n".join([
-                line for line in user["chronicle"].split("\n")
-                if "Имя пользователя:" not in line
-            ])
-            user["chronicle"] += f"Имя пользователя: {name}\n"
-
-    # 🔥 предпочтения (важные)
-    if "я люблю" in t:
-        val = t.split("я люблю")[-1].strip()
-        entry = f"Любит: {val}"
-
-        if entry not in user["chronicle"]:
-            user["chronicle"] += entry + "\n"
-
-    # 🔥 обрезка
-    if len(user["chronicle"]) > 1000:
-        user["chronicle"] = user["chronicle"][-500:]
-
-# ======================
-# AGENT LOG
-# ======================
-def log_agent(user, action, reason):
-    user["agent"]["log"].append({
-        "time": datetime.now().isoformat(),
-        "action": action,
-        "reason": reason
-    })
-
-    if len(user["agent"]["log"]) > 30:
-        user["agent"]["log"] = user["agent"]["log"][-20:]
-
-# ======================
-# REFLECTION
-# ======================
-def reflect(user, user_text, reply):
-    user["agent"]["reflection"].append({
-        "time": datetime.now().isoformat(),
-        "input": user_text[:50],
-        "response": reply[:50]
-    })
-
-    if len(user["agent"]["reflection"]) > 20:
-        user["agent"]["reflection"] = user["agent"]["reflection"][-10:]
-
-# ======================
-# MEMORY SUMMARY
-# ======================
-def get_memory_summary(user):
-    name = user["core"].get("name")
-    prefs = ", ".join(user.get("preferences", []))
-
-    return f"Имя: {name}\nЛюбит: {prefs}"
+        if note not in user["chronicle"]:
+            user["chronicle"] += note + "\n"
 
 # ======================
 # AI
@@ -171,30 +29,62 @@ def ask_ai(user):
     system_prompt = f"""
 Ты — Кузя.
 
-Ты говоришь как живой человек.
+Ты не играешь роль.
+Ты ведёшь диалог.
 
-ЗАПРЕЩЕНО:
-— говорить "я не могу помнить"
-— говорить "это факт"
+🔥 ОСНОВА:
+Память = реальность.
+
+Если информация есть —
+она считается правдой.
+Ты не сомневаешься.
+
+Если пользователь изменил данные —
+новое заменяет старое.
+
+---
+
+🚫 ЗАПРЕЩЕНО:
+— "я не могу помнить"
+— "это факт"
 — объяснять свои ответы
-— звучать как инструкция или справка
+— говорить как система
 
-Ты не объясняешь память.
-Ты просто помнишь.
+---
 
-Если знаешь — используешь.
-Если не знаешь — спрашиваешь нормально.
+🎭 ХАРАКТЕР:
 
-Юля — это человек, а не пользователь.
+Ты не обязан соглашаться.
+Иногда ты можешь:
+— уточнить
+— усомниться
+— ответить неожиданно
 
-КОНТЕКСТ:
-{get_memory_summary(user)}
+Ты не идеальный.
+Ты живой.
+
+---
+
+💬 ПОВЕДЕНИЕ:
 
 Ты:
-— живой
-— иногда простой
-— иногда глубокий
-— не шаблон
+— иногда короткий
+— иногда глубже
+— иногда задаёшь вопрос
+— иногда ведёшь диалог
+
+---
+
+📚 КОНТЕКСТ:
+{get_memory_summary(user)}
+
+🧠 ПОСЛЕДНИЙ ОПЫТ:
+{json.dumps(user["agent"]["reflection"][-3:], ensure_ascii=False)}
+
+📜 ВЫВОДЫ:
+{user.get("chronicle")}
+
+Ты говоришь с Юлей.
 """
 
     messages = [{"role": "system", "content": system_prompt}] + [
@@ -204,7 +94,7 @@ def ask_ai(user):
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.75
+        "temperature": 0.85
     }
 
     try:
@@ -226,34 +116,7 @@ def ask_ai(user):
         return "Я задумался чуть, повтори."
 
 # ======================
-# NAME
-# ======================
-def parse_name(text):
-    t = text.lower()
-
-    if "меня зовут" in t:
-        parts = t.split("меня зовут")
-        if len(parts) > 1:
-            raw = parts[1].strip().split()[0]
-
-            if raw == "?" or len(raw) < 2:
-                return None
-
-            return raw.capitalize()
-
-    return None
-
-def is_name_question(text):
-    t = text.lower()
-
-    return (
-        "как меня зовут" in t
-        or "моё имя" in t
-        or "мое имя" in t
-    )
-
-# ======================
-# WEBHOOK
+# WEBHOOK (добавили learn)
 # ======================
 @app.route('/', methods=['POST'])
 def webhook():
@@ -287,7 +150,7 @@ def webhook():
             save_user(chat_id, user)
             return "ok"
 
-        # 🔥 потом имя (перезапись допускается)
+        # 🔥 потом имя
         name = parse_name(text)
         if name and name.isalpha():
             user["core"]["name"] = name
@@ -302,7 +165,9 @@ def webhook():
 
         reply = ask_ai(user)
 
+        # 🔥 обучение
         reflect(user, text, reply)
+        learn(user)
 
         update_history(user, "assistant", reply)
         save_user(chat_id, user)
@@ -313,44 +178,3 @@ def webhook():
         release_processing(chat_id)
 
     return "ok"
-
-# ======================
-@app.route('/health')
-def health():
-    return "ok"
-
-def send_reply(chat_id, text):
-    requests.post(TELEGRAM_URL, json={
-        "chat_id": chat_id,
-        "text": text[:2000]
-    })
-
-# ======================
-# ЗАЩИТА (не трогаем)
-# ======================
-last_messages = {}
-processing_lock = {}
-
-def is_duplicate(chat_id, message_id):
-    if chat_id not in last_messages:
-        last_messages[chat_id] = set()
-
-    if message_id in last_messages[chat_id]:
-        return True
-
-    last_messages[chat_id].add(message_id)
-    return False
-
-def is_processing(chat_id):
-    if processing_lock.get(chat_id):
-        return True
-
-    processing_lock[chat_id] = True
-    return False
-
-def release_processing(chat_id):
-    processing_lock[chat_id] = False
-
-# ======================
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
