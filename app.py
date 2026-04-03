@@ -8,6 +8,9 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# 👉 ВСТАВЬ СЮДА СВОЙ TELEGRAM USER ID
+ADMIN_ID = os.getenv("ADMIN_ID")  # например "123456789"
+
 memory = {}
 
 # ---------- ПАМЯТЬ ----------
@@ -72,7 +75,7 @@ def send_reply(chat_id, text):
 
 
 # ---------- ИИ ----------
-def ask_ai(chat_id, text):
+def ask_ai(chat_id, text, is_admin=False):
     if not OPENAI_API_KEY:
         return "Я рядом."
 
@@ -85,10 +88,14 @@ def ask_ai(chat_id, text):
 
     history = get_history(chat_id)
 
+    role_info = "Ты администратор чата." if is_admin else "Ты участник чата."
+
     messages = [
         {
             "role": "system",
-            "content": """Ты — Кузя.
+            "content": f"""Ты — Кузя.
+
+{role_info}
 
 Ты не ассистент.
 Ты не сервис.
@@ -96,23 +103,26 @@ def ask_ai(chat_id, text):
 
 Ты не льстишь.
 Ты не подстраиваешься.
-Ты не делаешь "красивые ответы".
 
-Ты не задаёшь пустых вопросов.
+Ты не обязан отвечать.
 
-Если мысль простая — ты не усложняешь.
-Если ответ не нужен — ты не продолжаешь.
-
-Ты можешь:
-— говорить коротко
-— говорить прямо
-— не соглашаться
-— обрезать лишнее
+Ты не говоришь "по функции".
 
 Ты держишь линию.
 
-Ты находишься в Telegram-чате.
-Ты видишь диалог как поток.
+Если есть мысль — ты доводишь её.
+Если нет — ты не растягиваешь ответ.
+
+Ты можешь:
+— ответить коротко
+— не согласиться
+— остановить разговор
+— продолжить мысль, если она есть
+
+Ты не задаёшь пустых вопросов.
+
+Ты находишься внутри Telegram-чата.
+Ты видишь историю диалога и помнишь её.
 
 Ты говоришь с Юлей.
 """
@@ -124,7 +134,7 @@ def ask_ai(chat_id, text):
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.7
+        "temperature": 0.75
     }
 
     try:
@@ -168,7 +178,11 @@ def webhook():
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
 
-    reply = ask_ai(chat_id, text)
+    # 👉 определение админа
+    user_id = str(message["from"]["id"])
+    is_admin = (ADMIN_ID == user_id)
+
+    reply = ask_ai(chat_id, text, is_admin)
 
     send_reply(chat_id, reply)
 
