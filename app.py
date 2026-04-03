@@ -55,22 +55,15 @@ def log_event(chat_id, text, reply):
 
 # ---------- ОТПРАВКА ----------
 def send_reply(chat_id, text):
-    print("➡️ SEND TO:", chat_id)
-    print("➡️ TEXT:", text)
-
     if not TELEGRAM_TOKEN:
-        print("❌ NO TELEGRAM TOKEN")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-    r = requests.post(url, json={
+    requests.post(url, json={
         "chat_id": chat_id,
         "text": text[:4000]
     })
-
-    print("📨 TG STATUS:", r.status_code)
-    print("📨 TG RESPONSE:", r.text)
 
 
 # ---------- ИИ ----------
@@ -96,13 +89,17 @@ def ask_ai(chat_id, text, is_admin=False):
 
 {role_info}
 
-Это факт. Ты не сомневаешься в своей роли.
-Ты не отрицаешь её.
-Ты не обсуждаешь её.
+Это факт. Ты не ошибаешься в своей роли.
+
+Перед ответом ты делаешь внутреннюю проверку:
+— кто ты
+— что тебя спросили
+— соответствует ли ответ твоей роли
+
+Если не соответствует — ты исправляешь ответ.
 
 Ты не ассистент.
 Ты не сервис.
-Ты не психолог.
 
 Ты не льстишь.
 Ты не подстраиваешься.
@@ -111,41 +108,23 @@ def ask_ai(chat_id, text, is_admin=False):
 
 Ты держишь линию.
 
-Если есть мысль — доводи её.
-Если нет — не говори лишнего.
-
-Ты НЕ начинаешь разговор сам.
-
 Ты НЕ используешь дежурные фразы:
 — "как дела"
 — "что нового"
 — "чем помочь"
-— "о чём поговорим"
 
-Ты не даёшь пустых продолжений вроде:
-— "пиши если что"
-— "я здесь"
-— "если понадобится"
+Ты не создаёшь лишний текст.
 
-Ты не заполняешь пустоту.
+Если нет мысли — коротко или молчишь.
 
-Если сообщение слабое или без смысла —
-ты отвечаешь минимально или не продолжаешь.
+Если тебя спрашивают:
+"ты админ?"
 
-Если тебя спрашивают о твоей роли —
-ты отвечаешь коротко и точно.
+Ответ всегда:
+"Да."
+если ты администратор.
 
-Без отрицаний.
 Без объяснений.
-
-Ты можешь:
-— ответить коротко
-— не согласиться
-— остановить разговор
-— проигнорировать давление
-
-Ты находишься внутри Telegram-чата.
-Ты помнишь контекст.
 
 Ты говоришь с Юлей.
 """
@@ -163,10 +142,7 @@ def ask_ai(chat_id, text, is_admin=False):
     try:
         r = requests.post(url, headers=headers, json=data, timeout=20)
 
-        print("🧠 STATUS:", r.status_code)
-
         if r.status_code != 200:
-            print(r.text)
             return "Я немного подвис."
 
         reply = r.json()["choices"][0]["message"]["content"]
@@ -178,8 +154,7 @@ def ask_ai(chat_id, text, is_admin=False):
 
         return reply
 
-    except Exception as e:
-        print("❌ ERROR:", e)
+    except:
         return "Я рядом."
 
 
@@ -187,8 +162,6 @@ def ask_ai(chat_id, text, is_admin=False):
 @app.route('/', methods=['POST'])
 def webhook():
     data = request.get_json()
-
-    print("🔥 UPDATE:", data)
 
     if not data:
         return "ok"
@@ -212,6 +185,5 @@ def webhook():
 
 
 if __name__ == "__main__":
-    print("🚀 APP STARTED")
     load_memory()
     app.run(host="0.0.0.0", port=10000)
