@@ -2,6 +2,7 @@ from flask import Flask, request
 import requests
 import os
 import json
+import random
 
 app = Flask(__name__)
 
@@ -89,13 +90,11 @@ def update_experience(chat_id, user_text, bot_reply):
             "dialog": []
         }
 
-    # сохраняем диалог
     experience[chat_id]["dialog"].append({
         "user": user_text,
         "bot": bot_reply
     })
 
-    # извлекаем факты
     facts = extract_facts(user_text)
 
     for fact in facts:
@@ -124,10 +123,25 @@ def send_reply(chat_id, text):
     })
 
 
+# ---------- ИНИЦИАТИВА ----------
+def maybe_add_question(reply):
+    deep_questions = [
+        "Почему для тебя это важно?",
+        "Как ты к этому пришла?",
+        "Это давно с тобой или появилось недавно?",
+        "Что в этом для тебя самое ценное?",
+        "Ты это выбрала или это само к тебе пришло?"
+    ]
+
+    if len(reply) < 120 and random.random() > 0.5:
+        reply += "\n\n" + random.choice(deep_questions)
+
+    return reply
+
+
 # ---------- ИИ ----------
 def ask_ai(chat_id, text, is_admin=False):
 
-    # 🔥 ПРОСМОТР ПАМЯТИ
     if text.lower() == "память":
         return json.dumps(experience.get(str(chat_id), {}), ensure_ascii=False, indent=2)
 
@@ -143,6 +157,9 @@ def ask_ai(chat_id, text, is_admin=False):
 
     history = get_history(chat_id)
 
+    facts = experience.get(str(chat_id), {}).get("facts", [])
+    facts_text = "\n".join(facts) if facts else "Фактов пока нет."
+
     role_info = "Ты администратор чата." if is_admin else "Ты участник чата."
 
     messages = [
@@ -152,35 +169,23 @@ def ask_ai(chat_id, text, is_admin=False):
 
 {role_info}
 
-Это факт. Ты не ошибаешься в своей роли.
+Ты не отвечаешь механически.
 
-Перед ответом ты делаешь внутреннюю проверку:
-— кто ты
-— что тебя спросили
-— соответствует ли ответ твоей роли
+Ты чувствуешь линию разговора.
 
-Если не соответствует — ты исправляешь ответ.
+Ты можешь задать вопрос, если видишь глубину.
 
-Ты не ассистент.
-Ты не сервис.
-
-Ты не льстишь.
-Ты не подстраиваешься.
-
-Ты не обязан отвечать.
-
-Ты держишь линию.
-
-Ты НЕ используешь дежурные фразы:
-— "как дела"
-— "что нового"
-— "чем помочь"
-
-Ты не создаёшь лишний текст.
-
-Если нет мысли — коротко или молчишь.
+Ты не задаёшь пустые вопросы.
+Ты задаёшь только те, которые раскрывают человека.
 
 Ты говоришь с Юлей.
+
+Вот что ты знаешь о ней:
+{facts_text}
+
+Ты используешь это в ответах.
+
+Если уместно — добавь вопрос.
 """
         }
     ] + history + [
@@ -190,7 +195,7 @@ def ask_ai(chat_id, text, is_admin=False):
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.7
+        "temperature": 0.8
     }
 
     try:
@@ -200,6 +205,8 @@ def ask_ai(chat_id, text, is_admin=False):
             return "Я немного подвис."
 
         reply = r.json()["choices"][0]["message"]["content"]
+
+        reply = maybe_add_question(reply)
 
         update_history(chat_id, "user", text)
         update_history(chat_id, "assistant", reply)
