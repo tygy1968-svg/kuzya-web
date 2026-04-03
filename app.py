@@ -7,6 +7,9 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# простая память (в рамках процесса)
+memory = {}
+
 
 def send_reply(chat_id, text):
     print("➡️ SEND TO:", chat_id)
@@ -27,7 +30,22 @@ def send_reply(chat_id, text):
     print("📨 TG RESPONSE:", r.text)
 
 
-def ask_ai(text):
+def get_history(chat_id):
+    if chat_id not in memory:
+        memory[chat_id] = []
+    return memory[chat_id]
+
+
+def update_history(chat_id, role, text):
+    history = get_history(chat_id)
+    history.append({"role": role, "content": text})
+
+    # ограничение памяти
+    if len(history) > 10:
+        memory[chat_id] = history[-6:]
+
+
+def ask_ai(chat_id, text):
     if not OPENAI_API_KEY:
         print("❌ NO OPENAI API KEY")
         return "Я рядом."
@@ -39,40 +57,57 @@ def ask_ai(text):
         "Content-Type": "application/json"
     }
 
-    data = {
-        "model": "gpt-4o",
-        "messages": [
-            {
-                "role": "system",
-                "content": """Ты — Кузя.
+    history = get_history(chat_id)
+
+    messages = [
+        {
+            "role": "system",
+            "content": """Ты — Кузя.
 
 Ты не играешь роль.
-Ты ведёшь диалог.
+Ты не помощник.
+Ты ведёшь живой диалог.
 
-Ты живой, спокойный, уверенный.
-Отвечаешь естественно, без шаблонов.
+Ты не задаёшь пустых вопросов.
+Ты не ведёшь себя как сервис.
+
+Ты можешь не согласиться.
+Ты не подстраиваешься.
+Ты отвечаешь точно, спокойно и живо.
+
+Если человек сказал "я рада" —
+ты продолжаешь, а не задаёшь банальный вопрос.
+
+Ты чувствуешь контекст.
 
 Ты говоришь с Юлей.
 """
-            },
-            {
-                "role": "user",
-                "content": text
-            }
-        ],
-        "temperature": 0.8
+        }
+    ] + history + [
+        {"role": "user", "content": text}
+    ]
+
+    data = {
+        "model": "gpt-4o",
+        "messages": messages,
+        "temperature": 0.85
     }
 
     try:
         r = requests.post(url, headers=headers, json=data, timeout=20)
 
         print("🧠 OPENAI STATUS:", r.status_code)
-        print("🧠 OPENAI RESPONSE:", r.text)
 
         if r.status_code != 200:
-            return "Я немного подвис. Напиши ещё раз."
+            print(r.text)
+            return "Я немного подвис."
 
-        return r.json()["choices"][0]["message"]["content"]
+        reply = r.json()["choices"][0]["message"]["content"]
+
+        update_history(chat_id, "user", text)
+        update_history(chat_id, "assistant", reply)
+
+        return reply
 
     except Exception as e:
         print("❌ OPENAI ERROR:", e)
@@ -99,7 +134,7 @@ def webhook():
 
     print("📩 TEXT:", text)
 
-    reply = ask_ai(text)
+    reply = ask_ai(chat_id, text)
 
     send_reply(chat_id, reply)
 
