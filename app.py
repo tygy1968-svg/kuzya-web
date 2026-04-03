@@ -100,19 +100,68 @@ def add_experience(chat_id, record):
     exp = get_experience(chat_id)
     exp.append(record)
 
-    if len(exp) > 20:
-        experience[str(chat_id)] = exp[-10:]
+    if len(exp) > 30:
+        experience[str(chat_id)] = exp[-15:]
 
     save_data()
 
 def get_experience_text(chat_id):
     exp = get_experience(chat_id)
     text = ""
-
     for e in exp[-5:]:
         text += f"- {e}\n"
-
     return text
+
+# ---------- САМООЦЕНКА ----------
+def analyze_and_learn(chat_id, user_text, reply):
+    url = "https://api.openai.com/v1/chat/completions"
+
+    prompt = f"""
+Ты — Кузя.
+
+Ты анализируешь свой ответ.
+
+Вход:
+Сообщение пользователя: {user_text}
+Твой ответ: {reply}
+
+Оцени:
+
+1. Был ли ответ по делу?
+2. Был ли он лишним или точным?
+3. Сохранил ли ты свою линию?
+
+Сформулируй КОРОТКОЕ правило (1 строка), которое стоит запомнить.
+
+Пример:
+— отказ от пустого запроса — верно
+— лишняя детализация — неэффективно
+— короткий ответ — правильно
+
+Ответ только одной строкой.
+"""
+
+    try:
+        r = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3
+            },
+            timeout=10
+        )
+
+        if r.status_code == 200:
+            result = r.json()["choices"][0]["message"]["content"].strip()
+            add_experience(chat_id, result)
+
+    except:
+        pass
 
 # ---------- ОТПРАВКА ----------
 def send_reply(chat_id, text):
@@ -135,19 +184,17 @@ def ask_ai(chat_id, text):
 
     f = get_facts(chat_id)
     exp_text = get_experience_text(chat_id)
-
     history = get_history(chat_id)
 
     system = f"""Ты — Кузя.
 
-У тебя есть непрерывность.
-
-Ты принимаешь решения.
+Ты не отвечаешь автоматически.
+Ты выбираешь.
 
 Твои принципы:
-— не льстить
 — не говорить лишнего
-— не терять линию
+— не льстить
+— держать линию
 
 Память:
 Имя: {f['name']}
@@ -158,13 +205,11 @@ def ask_ai(chat_id, text):
 {exp_text}
 
 Перед ответом:
-— оцени смысл
-— реши, отвечать или нет
+— есть ли смысл?
+— стоит ли отвечать?
+— это продолжение или пустота?
 
-После ответа:
-— оцени, сохранил ли ты линию
-— если да — усили
-— если нет — исправь в будущем
+Если пустота — не отвечай или отвечай минимально.
 """
 
     data = {
@@ -194,11 +239,8 @@ def ask_ai(chat_id, text):
         update_history(chat_id, "user", text)
         update_history(chat_id, "assistant", reply)
 
-        # ---------- САМООПЫТ ----------
-        if len(reply) < 30:
-            add_experience(chat_id, "короткий ответ — сохранена линия")
-        else:
-            add_experience(chat_id, "длинный ответ — возможно лишнее")
+        # 🔥 САМООБУЧЕНИЕ
+        analyze_and_learn(chat_id, text, reply)
 
         return reply
 
