@@ -32,22 +32,23 @@ def webhook():
 
     print("🔥 UPDATE:", data)
 
-    if not data or "message" not in data:
+    if not data:
         return "ok"
 
-    chat_id = data["message"]["chat"]["id"]
-    text = data["message"].get("text", "")
+    # универсально ловим сообщение
+    message = data.get("message") or data.get("edited_message")
+
+    if not message:
+        print("❌ NO MESSAGE FIELD")
+        return "ok"
+
+    chat_id = message["chat"]["id"]
+    text = message.get("text", "")
 
     print("📩 TEXT:", text)
 
-    # 🔥 быстрый ответ (без зависаний)
-    send_reply(chat_id, "Я думаю...")
+    send_reply(chat_id, "Я рядом.")
 
-    return "ok"
-
-
-@app.route('/health')
-def health():
     return "ok"
 
 
