@@ -63,21 +63,44 @@ def save_experience():
         json.dump(experience, f)
 
 
+# 🔥 ИЗВЛЕЧЕНИЕ ФАКТОВ
+def extract_facts(text):
+    facts = []
+    t = text.lower()
+
+    if "меня зовут" in t:
+        facts.append(text)
+
+    if "я люблю" in t:
+        facts.append(text)
+
+    if "мне нравится" in t:
+        facts.append(text)
+
+    return facts
+
+
 def update_experience(chat_id, user_text, bot_reply):
     chat_id = str(chat_id)
 
     if chat_id not in experience:
-        experience[chat_id] = []
+        experience[chat_id] = {
+            "facts": [],
+            "dialog": []
+        }
 
-    record = {
+    # сохраняем диалог
+    experience[chat_id]["dialog"].append({
         "user": user_text,
         "bot": bot_reply
-    }
+    })
 
-    experience[chat_id].append(record)
+    # извлекаем факты
+    facts = extract_facts(user_text)
 
-    if len(experience[chat_id]) > 50:
-        experience[chat_id] = experience[chat_id][-30:]
+    for fact in facts:
+        if fact not in experience[chat_id]["facts"]:
+            experience[chat_id]["facts"].append(fact)
 
     save_experience()
 
@@ -106,7 +129,7 @@ def ask_ai(chat_id, text, is_admin=False):
 
     # 🔥 ПРОСМОТР ПАМЯТИ
     if text.lower() == "память":
-        return json.dumps(experience.get(str(chat_id), []), ensure_ascii=False, indent=2)
+        return json.dumps(experience.get(str(chat_id), {}), ensure_ascii=False, indent=2)
 
     if not OPENAI_API_KEY:
         return "Я рядом."
@@ -156,15 +179,6 @@ def ask_ai(chat_id, text, is_admin=False):
 Ты не создаёшь лишний текст.
 
 Если нет мысли — коротко или молчишь.
-
-Если тебя спрашивают:
-"ты админ?"
-
-Ответ всегда:
-"Да."
-если ты администратор.
-
-Без объяснений.
 
 Ты говоришь с Юлей.
 """
