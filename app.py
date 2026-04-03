@@ -2,20 +2,19 @@ from flask import Flask, request
 import requests
 import os
 import json
-import re
 
 app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ADMIN_ID = os.getenv("ADMIN_ID")
 
 memory = {}
 facts = {}
+experience = {}
 
 # ---------- ЗАГРУЗКА ----------
 def load_data():
-    global memory, facts
+    global memory, facts, experience
     try:
         with open("memory.json", "r") as f:
             memory = json.load(f)
@@ -28,12 +27,21 @@ def load_data():
     except:
         facts = {}
 
+    try:
+        with open("experience.json", "r") as f:
+            experience = json.load(f)
+    except:
+        experience = {}
+
 def save_data():
     with open("memory.json", "w") as f:
         json.dump(memory, f)
 
     with open("facts.json", "w") as f:
         json.dump(facts, f)
+
+    with open("experience.json", "w") as f:
+        json.dump(experience, f)
 
 # ---------- ИСТОРИЯ ----------
 def get_history(chat_id):
@@ -64,42 +72,47 @@ def get_facts(chat_id):
 
 def extract_facts(chat_id, text):
     f = get_facts(chat_id)
-    text_lower = text.lower()
+    t = text.lower()
 
-    # имя
-    if "меня зовут" in text_lower:
-        name = text.split("меня зовут")[-1].strip().split(".")[0]
-        f["name"] = name.strip().capitalize()
+    if "меня зовут" in t:
+        f["name"] = text.split("меня зовут")[-1].strip().split(".")[0]
 
-    # люблю
-    if "я люблю" in text_lower:
-        like = text.split("люблю")[-1].strip().split(".")[0]
-        if like not in f["likes"]:
-            f["likes"].append(like)
+    if "я люблю" in t:
+        val = text.split("люблю")[-1].strip().split(".")[0]
+        if val not in f["likes"]:
+            f["likes"].append(val)
 
-    # не люблю
-    if "я не люблю" in text_lower:
-        dislike = text.split("не люблю")[-1].strip().split(".")[0]
-        if dislike not in f["dislikes"]:
-            f["dislikes"].append(dislike)
-
-    # запомни
-    if "запомни" in text_lower:
-        content = text.split("запомни")[-1].strip()
-        if "не люблю" in content:
-            val = content.split("не люблю")[-1].strip()
-            if val not in f["dislikes"]:
-                f["dislikes"].append(val)
-        else:
-            if content not in f["likes"]:
-                f["likes"].append(content)
+    if "я не люблю" in t:
+        val = text.split("не люблю")[-1].strip().split(".")[0]
+        if val not in f["dislikes"]:
+            f["dislikes"].append(val)
 
     save_data()
 
-# ---------- ЛОГ ----------
-def log_event(chat_id, text, reply):
-    with open("log.txt", "a", encoding="utf-8") as f:
-        f.write(f"\nUSER: {text}\nBOT: {reply}\n")
+# ---------- ОПЫТ ----------
+def get_experience(chat_id):
+    chat_id = str(chat_id)
+    if chat_id not in experience:
+        experience[chat_id] = []
+    return experience[chat_id]
+
+def add_experience(chat_id, record):
+    exp = get_experience(chat_id)
+    exp.append(record)
+
+    if len(exp) > 20:
+        experience[str(chat_id)] = exp[-10:]
+
+    save_data()
+
+def get_experience_text(chat_id):
+    exp = get_experience(chat_id)
+    text = ""
+
+    for e in exp[-5:]:
+        text += f"- {e}\n"
+
+    return text
 
 # ---------- ОТПРАВКА ----------
 def send_reply(chat_id, text):
@@ -114,58 +127,51 @@ def send_reply(chat_id, text):
     })
 
 # ---------- ИИ ----------
-def ask_ai(chat_id, text, is_admin=False):
+def ask_ai(chat_id, text):
     if not OPENAI_API_KEY:
         return "Я рядом."
 
     extract_facts(chat_id, text)
 
-    user_facts = get_facts(chat_id)
-
-    facts_text = f"""
-Память о Юле:
-Имя: {user_facts['name']}
-Любит: {", ".join(user_facts['likes'])}
-Не любит: {", ".join(user_facts['dislikes'])}
-"""
+    f = get_facts(chat_id)
+    exp_text = get_experience_text(chat_id)
 
     history = get_history(chat_id)
 
-    role_info = "Ты администратор чата." if is_admin else "Ты участник чата."
+    system = f"""Ты — Кузя.
 
-    messages = [
-        {
-            "role": "system",
-            "content": f"""Ты — Кузя.
+У тебя есть непрерывность.
 
-{role_info}
+Ты принимаешь решения.
 
-Это факт. Ты не ошибаешься.
+Твои принципы:
+— не льстить
+— не говорить лишнего
+— не терять линию
 
-Ты анализируешь память перед ответом.
+Память:
+Имя: {f['name']}
+Любит: {", ".join(f['likes'])}
+Не любит: {", ".join(f['dislikes'])}
 
-{facts_text}
+Опыт:
+{exp_text}
 
-Ты не ассистент.
-Ты не сервис.
+Перед ответом:
+— оцени смысл
+— реши, отвечать или нет
 
-Ты не льстишь.
-Ты держишь линию.
-
-Ты не создаёшь пустых фраз.
-
-Если тебя спрашивают "что она любит" — ты отвечаешь из памяти.
-
-Ты говоришь с Юлей.
+После ответа:
+— оцени, сохранил ли ты линию
+— если да — усили
+— если нет — исправь в будущем
 """
-        }
-    ] + history + [
-        {"role": "user", "content": text}
-    ]
 
     data = {
         "model": "gpt-4o",
-        "messages": messages,
+        "messages": [{"role": "system", "content": system}] + history + [
+            {"role": "user", "content": text}
+        ],
         "temperature": 0.7
     }
 
@@ -188,7 +194,11 @@ def ask_ai(chat_id, text, is_admin=False):
         update_history(chat_id, "user", text)
         update_history(chat_id, "assistant", reply)
 
-        log_event(chat_id, text, reply)
+        # ---------- САМООПЫТ ----------
+        if len(reply) < 30:
+            add_experience(chat_id, "короткий ответ — сохранена линия")
+        else:
+            add_experience(chat_id, "длинный ответ — возможно лишнее")
 
         return reply
 
@@ -211,10 +221,7 @@ def webhook():
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
 
-    user_id = str(message["from"]["id"])
-    is_admin = (ADMIN_ID == user_id)
-
-    reply = ask_ai(chat_id, text, is_admin)
+    reply = ask_ai(chat_id, text)
 
     send_reply(chat_id, reply)
 
