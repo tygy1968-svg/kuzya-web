@@ -40,8 +40,14 @@ def webhook():
 
     print("📩 TEXT:", text)
 
-    send_reply(chat_id, "Я рядом.")
+    # 🔥 быстрый ответ (без зависаний)
+    send_reply(chat_id, "Я думаю...")
 
+    return "ok"
+
+
+@app.route('/health')
+def health():
     return "ok"
 
 
