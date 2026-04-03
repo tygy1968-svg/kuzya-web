@@ -62,6 +62,7 @@ def load_experience():
 def save_experience():
     with open("experience.json", "w") as f:
         json.dump(experience, f)
+    print("🔥 EXPERIENCE SAVED:", experience)
 
 
 def extract_facts(text):
@@ -95,16 +96,17 @@ def update_experience(chat_id, user_text, bot_reply):
             "dialog": []
         }
 
-    experience[chat_id]["dialog"].append({
-        "user": user_text,
-        "bot": bot_reply
-    })
+    if user_text:
+        experience[chat_id]["dialog"].append({
+            "user": user_text,
+            "bot": bot_reply
+        })
 
-    facts = extract_facts(user_text)
+        facts = extract_facts(user_text)
 
-    for fact in facts:
-        if fact not in experience[chat_id]["facts"]:
-            experience[chat_id]["facts"].append(fact)
+        for fact in facts:
+            if fact not in experience[chat_id]["facts"]:
+                experience[chat_id]["facts"].append(fact)
 
     save_experience()
 
@@ -153,6 +155,9 @@ def ask_ai(chat_id, text, is_admin=False):
     if not OPENAI_API_KEY:
         return "Я рядом."
 
+    # 🔥 сначала фиксируем опыт пользователя
+    update_experience(chat_id, text, "")
+
     url = "https://api.openai.com/v1/chat/completions"
 
     headers = {
@@ -164,7 +169,6 @@ def ask_ai(chat_id, text, is_admin=False):
 
     facts = experience.get(str(chat_id), {}).get("facts", [])
 
-    # 🔥 ВАЖНО: формируем живую память
     if facts:
         facts_text = "Ты знаешь о Юле:\n" + "\n".join(f"- {f}" for f in facts)
     else:
@@ -184,19 +188,12 @@ def ask_ai(chat_id, text, is_admin=False):
 {facts_text}
 
 ЭТО ОБЯЗАТЕЛЬНО:
-— если есть факты → ты используешь их в ответе
-— если тебя спрашивают о Юле → ты опираешься на факты
-— ты НЕ говоришь "я не знаю", если информация есть
-— ты можешь дополнять, но не игнорировать
+— если есть факты → ты используешь их
+— ты не игнорируешь память
+— ты не говоришь "не знаю", если информация есть
 
-Ты не механический.
-Ты ведёшь разговор.
-
-Ты не используешь пустые фразы.
-
+Ты живой в разговоре.
 Ты держишь линию.
-
-Если есть память — ты её применяешь естественно.
 """
         }
     ] + history + [
