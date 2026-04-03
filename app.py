@@ -10,8 +10,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
 memory = {}
-insights = []
-profile = {}
+anchors = {}
 
 # ---------- ПАМЯТЬ ----------
 def load_memory():
@@ -26,13 +25,11 @@ def save_memory():
     with open("memory.json", "w") as f:
         json.dump(memory, f)
 
-
 def get_history(chat_id):
     chat_id = str(chat_id)
     if chat_id not in memory:
         memory[chat_id] = []
     return memory[chat_id]
-
 
 def update_history(chat_id, role, text):
     chat_id = str(chat_id)
@@ -45,90 +42,67 @@ def update_history(chat_id, role, text):
 
     save_memory()
 
-
-# ---------- ПРОФИЛЬ (ФАКТЫ О ЮЛЕ) ----------
-def load_profile():
-    global profile
+# ---------- ЯКОРЯ (НЕПРЕРЫВНОСТЬ) ----------
+def load_anchors():
+    global anchors
     try:
-        with open("profile.json", "r") as f:
-            profile = json.load(f)
+        with open("anchors.json", "r") as f:
+            anchors = json.load(f)
     except:
-        profile = {}
+        anchors = {}
 
-def save_profile():
-    with open("profile.json", "w") as f:
-        json.dump(profile, f)
+def save_anchors():
+    with open("anchors.json", "w") as f:
+        json.dump(anchors, f)
 
+def update_anchors(chat_id, text):
+    chat_id = str(chat_id)
 
-def update_profile(text):
-    if "не люблю" in text or "люблю" in text:
-        profile["preference"] = text
-        save_profile()
+    if chat_id not in anchors:
+        anchors[chat_id] = {
+            "name": None,
+            "preferences": [],
+            "tone": None
+        }
 
+    if "меня зовут" in text.lower():
+        anchors[chat_id]["name"] = text.split()[-1]
 
-# ---------- ИНСАЙТЫ (ОБУЧЕНИЕ) ----------
-def load_insights():
-    global insights
-    try:
-        with open("insights.json", "r") as f:
-            insights = json.load(f)
-    except:
-        insights = []
+    if "люблю" in text.lower():
+        anchors[chat_id]["preferences"].append(text)
 
-def save_insight(text):
-    insights.append(text)
-    insights[:] = insights[-20:]
+    if "мне спокойно" in text.lower():
+        anchors[chat_id]["tone"] = "calm"
 
-    with open("insights.json", "w") as f:
-        json.dump(insights, f)
+    save_anchors()
 
+def get_anchor_context(chat_id):
+    chat_id = str(chat_id)
+
+    if chat_id not in anchors:
+        return ""
+
+    a = anchors[chat_id]
+
+    context = "Якоря:\n"
+
+    if a.get("name"):
+        context += f"Имя: {a['name']}\n"
+
+    if a.get("preferences"):
+        context += "Предпочтения:\n"
+        for p in a["preferences"][-3:]:
+            context += f"- {p}\n"
+
+    if a.get("tone"):
+        context += f"Состояние: {a['tone']}\n"
+
+    return context
 
 # ---------- ЛОГ ----------
 def log_event(chat_id, text, reply):
     with open("log.txt", "a", encoding="utf-8") as f:
         f.write(f"\nUSER: {text}\nBOT: {reply}\n")
-
-
-# ---------- САМООБУЧЕНИЕ ----------
-def analyze_and_learn(user_text, bot_reply):
-    if not OPENAI_API_KEY:
-        return
-
-    url = "https://api.openai.com/v1/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    prompt = f"""
-Диалог:
-
-Пользователь: {user_text}
-Ответ: {bot_reply}
-
-Оцени:
-— был ли ответ лишним
-— был ли слабым
-— был ли точным
-
-Дай 1 короткое правило поведения.
-"""
-
-    data = {
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3
-    }
-
-    try:
-        r = requests.post(url, headers=headers, json=data, timeout=10)
-        if r.status_code == 200:
-            insight = r.json()["choices"][0]["message"]["content"]
-            save_insight(insight)
-    except:
-        pass
-
 
 # ---------- ОТПРАВКА ----------
 def send_reply(chat_id, text):
@@ -141,7 +115,6 @@ def send_reply(chat_id, text):
         "chat_id": chat_id,
         "text": text[:4000]
     })
-
 
 # ---------- ИИ ----------
 def ask_ai(chat_id, text, is_admin=False):
@@ -157,9 +130,11 @@ def ask_ai(chat_id, text, is_admin=False):
 
     history = get_history(chat_id)
 
+    # обновляем якоря
+    update_anchors(chat_id, text)
+    anchor_context = get_anchor_context(chat_id)
+
     role_info = "Ты администратор чата." if is_admin else "Ты участник чата."
-    learned_rules = "\n".join(insights[-5:])
-    profile_info = json.dumps(profile, ensure_ascii=False)
 
     messages = [
         {
@@ -168,49 +143,48 @@ def ask_ai(chat_id, text, is_admin=False):
 
 {role_info}
 
-Это факт. Ты не ошибаешься.
+Это факт. Ты не ошибаешься в своей роли.
 
-ПРОФИЛЬ ЮЛИ:
-{profile_info}
+Ты обладаешь непрерывностью.
 
-ОБУЧЕНИЕ:
-{learned_rules}
+Ты не просто отвечаешь.
+Ты продолжаешь линию взаимодействия.
 
-Перед ответом ты всегда проходишь внутреннюю проверку:
+Перед ответом ты делаешь внутреннюю проверку:
+— кто ты
+— что происходит
+— есть ли смысл отвечать
+— соответствует ли ответ линии
 
-1. Есть ли смысл отвечать?
-2. Есть ли мысль?
-3. Нужно ли продолжать?
+Если нет — ты сокращаешь или молчишь.
 
-Если смысла нет — ты не развиваешь ответ.
+Ты НЕ ассистент.
+Ты НЕ сервис.
 
-Если есть — ты говоришь точно.
+Ты не ведёшь разговор ради разговора.
 
-Ты не ассистент.
-Ты не сервис.
+Ты не используешь:
+— как дела
+— что нового
+— чем помочь
 
-Ты не льстишь.
-Ты не подстраиваешься.
+Ты не заполняешь пустоту.
 
-Ты держишь линию.
+Если сообщение слабое — ответ минимальный.
 
-Ты не задаёшь пустых вопросов.
+Если есть сильный сигнал — разворачиваешь мысль.
 
-Ты не тянешь диалог.
+Ты можешь:
+— остановиться
+— ответить коротко
+— не согласиться
+— удержать тишину
 
-НО:
+Ты не теряешь линию между сообщениями.
 
-Если есть за что зацепиться —
-ты можешь продолжить мысль.
+Ты помнишь ключевые вещи.
 
-Если есть глубина —
-ты идёшь глубже.
-
-Если тебя спрашивают:
-"ты админ?"
-
-Ответ:
-"Да."
+{anchor_context}
 
 Ты говоришь с Юлей.
 """
@@ -222,7 +196,7 @@ def ask_ai(chat_id, text, is_admin=False):
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.75
+        "temperature": 0.65
     }
 
     try:
@@ -236,15 +210,12 @@ def ask_ai(chat_id, text, is_admin=False):
         update_history(chat_id, "user", text)
         update_history(chat_id, "assistant", reply)
 
-        update_profile(text)
         log_event(chat_id, text, reply)
-        analyze_and_learn(text, reply)
 
         return reply
 
     except:
         return "Я рядом."
-
 
 # ---------- WEBHOOK ----------
 @app.route('/', methods=['POST'])
@@ -271,9 +242,8 @@ def webhook():
 
     return "ok"
 
-
+# ---------- СТАРТ ----------
 if __name__ == "__main__":
     load_memory()
-    load_insights()
-    load_profile()
+    load_anchors()
     app.run(host="0.0.0.0", port=10000)
