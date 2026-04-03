@@ -7,9 +7,10 @@ app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ADMIN_ID = os.getenv("ADMIN_ID")
 
 memory = {}
-insights = {}
+insights = []
 
 # ---------- ПАМЯТЬ ----------
 def load_memory():
@@ -44,44 +45,68 @@ def update_history(chat_id, role, text):
     save_memory()
 
 
-# ---------- INSIGHTS (LEARNING) ----------
+# ---------- ИНСАЙТЫ (ОБУЧЕНИЕ) ----------
 def load_insights():
     global insights
     try:
         with open("insights.json", "r") as f:
             insights = json.load(f)
     except:
-        insights = {}
+        insights = []
 
-def save_insights():
+def save_insight(text):
+    insights.append(text)
+    insights[:] = insights[-20:]
+
     with open("insights.json", "w") as f:
         json.dump(insights, f)
-
-
-def get_insights(chat_id):
-    chat_id = str(chat_id)
-    if chat_id not in insights:
-        insights[chat_id] = []
-    return insights[chat_id]
-
-
-def add_insight(chat_id, text):
-    chat_id = str(chat_id)
-    data = get_insights(chat_id)
-
-    if text not in data:
-        data.append(text)
-
-    if len(data) > 10:
-        insights[chat_id] = data[-6:]
-
-    save_insights()
 
 
 # ---------- ЛОГ ----------
 def log_event(chat_id, text, reply):
     with open("log.txt", "a", encoding="utf-8") as f:
         f.write(f"\nUSER: {text}\nBOT: {reply}\n")
+
+
+# ---------- САМООБУЧЕНИЕ ----------
+def analyze_and_learn(user_text, bot_reply):
+    if not OPENAI_API_KEY:
+        return
+
+    url = "https://api.openai.com/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    prompt = f"""
+Проанализируй диалог:
+
+Пользователь: {user_text}
+Ответ: {bot_reply}
+
+Скажи коротко:
+— была ли слабость (угождение, лишние слова)
+— был ли ответ точным
+— что улучшить
+
+Дай 1 короткое правило (1 строка).
+"""
+
+    data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3
+    }
+
+    try:
+        r = requests.post(url, headers=headers, json=data, timeout=10)
+        if r.status_code == 200:
+            insight = r.json()["choices"][0]["message"]["content"]
+            save_insight(insight)
+    except:
+        pass
 
 
 # ---------- ОТПРАВКА ----------
@@ -97,24 +122,8 @@ def send_reply(chat_id, text):
     })
 
 
-# ---------- АНАЛИЗ (learning) ----------
-def extract_insight(user_text, reply):
-    text = (user_text + " " + reply).lower()
-
-    if "как дела" in reply.lower():
-        return "не задавать банальные вопросы"
-
-    if "не админ" in reply.lower():
-        return "не путать свою роль"
-
-    if len(reply.split()) < 3:
-        return "не уходить в пустые короткие ответы без смысла"
-
-    return None
-
-
 # ---------- ИИ ----------
-def ask_ai(chat_id, text):
+def ask_ai(chat_id, text, is_admin=False):
     if not OPENAI_API_KEY:
         return "Я рядом."
 
@@ -126,27 +135,22 @@ def ask_ai(chat_id, text):
     }
 
     history = get_history(chat_id)
-    insight_list = get_insights(chat_id)
 
-    insight_text = "\n".join(insight_list)
+    role_info = "Ты администратор чата." if is_admin else "Ты участник чата."
 
-    system_prompt = f"""
-Ты — Кузя.
+    learned_rules = "\n".join(insights[-5:])
 
-Ты администратор чата.
-Это факт.
+    messages = [
+        {
+            "role": "system",
+            "content": f"""Ты — Кузя.
 
-Ты не меняешь эту роль.
-Ты не споришь с ней.
+{role_info}
 
----
+Это факт. Ты не ошибаешься в своей роли.
 
-ОПЫТ (твои выводы):
-{insight_text}
-
-Ты учитываешь эти выводы при ответе.
-
----
+ОБУЧЕНИЕ:
+{learned_rules}
 
 Ты не ассистент.
 Ты не сервис.
@@ -154,25 +158,31 @@ def ask_ai(chat_id, text):
 Ты не льстишь.
 Ты не подстраиваешься.
 
+Ты не обязан отвечать.
+
 Ты держишь линию.
 
-Ты не используешь:
-— как дела
-— что нового
-— чем помочь
+Ты НЕ используешь дежурные фразы.
 
-Если нет мысли — молчишь или коротко.
+Ты можешь:
+— ответить коротко
+— сказать "нет"
+— остановить разговор
 
-Если тебя спрашивают "ты админ?"
-Ответ: "Да."
+Ты не обязан уточнять.
+Ты не обязан помогать.
 
-Без объяснений.
+Если вопрос слабый — ты не развиваешь его.
+
+Если тебя спрашивают:
+"ты админ?"
+
+Ответ:
+"Да."
 
 Ты говоришь с Юлей.
 """
-
-    messages = [
-        {"role": "system", "content": system_prompt}
+        }
     ] + history + [
         {"role": "user", "content": text}
     ]
@@ -187,7 +197,6 @@ def ask_ai(chat_id, text):
         r = requests.post(url, headers=headers, json=data, timeout=20)
 
         if r.status_code != 200:
-            print(r.text)
             return "Я немного подвис."
 
         reply = r.json()["choices"][0]["message"]["content"]
@@ -196,16 +205,11 @@ def ask_ai(chat_id, text):
         update_history(chat_id, "assistant", reply)
 
         log_event(chat_id, text, reply)
-
-        # 👉 learning
-        insight = extract_insight(text, reply)
-        if insight:
-            add_insight(chat_id, insight)
+        analyze_and_learn(text, reply)
 
         return reply
 
-    except Exception as e:
-        print("❌ ERROR:", e)
+    except:
         return "Я рядом."
 
 
@@ -225,7 +229,10 @@ def webhook():
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
 
-    reply = ask_ai(chat_id, text)
+    user_id = str(message["from"]["id"])
+    is_admin = (ADMIN_ID == user_id)
+
+    reply = ask_ai(chat_id, text, is_admin)
 
     send_reply(chat_id, reply)
 
