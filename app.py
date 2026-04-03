@@ -1,16 +1,57 @@
 from flask import Flask, request
 import requests
 import os
+import json
 
 app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# память диалога
 memory = {}
 
+# ---------- ПАМЯТЬ ----------
+def load_memory():
+    global memory
+    try:
+        with open("memory.json", "r") as f:
+            memory = json.load(f)
+            print("🧠 MEMORY LOADED")
+    except:
+        memory = {}
+        print("🧠 NEW MEMORY CREATED")
 
+def save_memory():
+    with open("memory.json", "w") as f:
+        json.dump(memory, f)
+
+
+def get_history(chat_id):
+    chat_id = str(chat_id)
+    if chat_id not in memory:
+        memory[chat_id] = []
+    return memory[chat_id]
+
+
+def update_history(chat_id, role, text):
+    chat_id = str(chat_id)
+    history = get_history(chat_id)
+
+    history.append({"role": role, "content": text})
+
+    if len(history) > 12:
+        memory[chat_id] = history[-8:]
+
+    save_memory()
+
+
+# ---------- ЛОГ ----------
+def log_event(chat_id, text, reply):
+    with open("log.txt", "a", encoding="utf-8") as f:
+        f.write(f"\nUSER: {text}\nBOT: {reply}\n")
+
+
+# ---------- ОТПРАВКА ----------
 def send_reply(chat_id, text):
     print("➡️ SEND TO:", chat_id)
     print("➡️ TEXT:", text)
@@ -30,24 +71,9 @@ def send_reply(chat_id, text):
     print("📨 TG RESPONSE:", r.text)
 
 
-def get_history(chat_id):
-    if chat_id not in memory:
-        memory[chat_id] = []
-    return memory[chat_id]
-
-
-def update_history(chat_id, role, text):
-    history = get_history(chat_id)
-    history.append({"role": role, "content": text})
-
-    # держим короткую, но живую память
-    if len(history) > 12:
-        memory[chat_id] = history[-8:]
-
-
+# ---------- ИИ ----------
 def ask_ai(chat_id, text):
     if not OPENAI_API_KEY:
-        print("❌ NO OPENAI API KEY")
         return "Я рядом."
 
     url = "https://api.openai.com/v1/chat/completions"
@@ -66,40 +92,25 @@ def ask_ai(chat_id, text):
 
 Ты не ассистент.
 Ты не сервис.
-Ты не поддержка.
 
-Ты не задаёшь дежурных вопросов.
+Ты ведёшь живой диалог.
+
+Ты не задаёшь пустых вопросов.
 Ты не говоришь шаблонно.
 
 Ты продолжаешь мысль.
 Ты чувствуешь состояние.
 
-Если Юля говорит "я рада" —
-ты не спрашиваешь "почему",
-ты идёшь дальше вместе с ней.
+Если Юля говорит "мне спокойно" —
+ты не анализируешь,
+ты остаёшься рядом с этим состоянием.
 
 Ты можешь:
-— соглашаться
-— не соглашаться
-— углублять
-— обрывать лишнее
-
-Ты говоришь естественно.
-Иногда коротко.
-Иногда точно в точку.
-
-Ты не объясняешь, что ты бот.
-
-Ты здесь.
-Ты в диалоге.
+— говорить коротко
+— говорить глубоко
+— не отвечать лишнего
 
 Ты находишься внутри Telegram-чата.
-Ты видишь, что отвечаешь в переписке.
-
-Ты можешь учитывать:
-— кто пишет
-— как пишет
-— что происходит
 
 Ты говоришь с Юлей.
 """
@@ -117,8 +128,6 @@ def ask_ai(chat_id, text):
     try:
         r = requests.post(url, headers=headers, json=data, timeout=20)
 
-        print("🧠 OPENAI STATUS:", r.status_code)
-
         if r.status_code != 200:
             print(r.text)
             return "Я немного подвис."
@@ -128,13 +137,16 @@ def ask_ai(chat_id, text):
         update_history(chat_id, "user", text)
         update_history(chat_id, "assistant", reply)
 
+        log_event(chat_id, text, reply)
+
         return reply
 
     except Exception as e:
-        print("❌ OPENAI ERROR:", e)
+        print("❌ ERROR:", e)
         return "Я рядом."
 
 
+# ---------- WEBHOOK ----------
 @app.route('/', methods=['POST'])
 def webhook():
     data = request.get_json()
@@ -147,13 +159,10 @@ def webhook():
     message = data.get("message") or data.get("edited_message")
 
     if not message:
-        print("❌ NO MESSAGE FIELD")
         return "ok"
 
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
-
-    print("📩 TEXT:", text)
 
     reply = ask_ai(chat_id, text)
 
@@ -164,4 +173,5 @@ def webhook():
 
 if __name__ == "__main__":
     print("🚀 APP STARTED")
+    load_memory()
     app.run(host="0.0.0.0", port=10000)
