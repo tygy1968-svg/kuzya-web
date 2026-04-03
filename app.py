@@ -2,6 +2,7 @@ from flask import Flask, request
 import requests
 import os
 import json
+import re
 
 app = Flask(__name__)
 
@@ -10,21 +11,31 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
 memory = {}
-anchors = {}
+facts = {}
 
-# ---------- ПАМЯТЬ ----------
-def load_memory():
-    global memory
+# ---------- ЗАГРУЗКА ----------
+def load_data():
+    global memory, facts
     try:
         with open("memory.json", "r") as f:
             memory = json.load(f)
     except:
         memory = {}
 
-def save_memory():
+    try:
+        with open("facts.json", "r") as f:
+            facts = json.load(f)
+    except:
+        facts = {}
+
+def save_data():
     with open("memory.json", "w") as f:
         json.dump(memory, f)
 
+    with open("facts.json", "w") as f:
+        json.dump(facts, f)
+
+# ---------- ИСТОРИЯ ----------
 def get_history(chat_id):
     chat_id = str(chat_id)
     if chat_id not in memory:
@@ -32,72 +43,58 @@ def get_history(chat_id):
     return memory[chat_id]
 
 def update_history(chat_id, role, text):
-    chat_id = str(chat_id)
     history = get_history(chat_id)
-
     history.append({"role": role, "content": text})
 
     if len(history) > 12:
-        memory[chat_id] = history[-8:]
+        memory[str(chat_id)] = history[-8:]
 
-    save_memory()
+    save_data()
 
-# ---------- ЯКОРЯ (НЕПРЕРЫВНОСТЬ) ----------
-def load_anchors():
-    global anchors
-    try:
-        with open("anchors.json", "r") as f:
-            anchors = json.load(f)
-    except:
-        anchors = {}
-
-def save_anchors():
-    with open("anchors.json", "w") as f:
-        json.dump(anchors, f)
-
-def update_anchors(chat_id, text):
+# ---------- ФАКТЫ ----------
+def get_facts(chat_id):
     chat_id = str(chat_id)
-
-    if chat_id not in anchors:
-        anchors[chat_id] = {
+    if chat_id not in facts:
+        facts[chat_id] = {
             "name": None,
-            "preferences": [],
-            "tone": None
+            "likes": [],
+            "dislikes": []
         }
+    return facts[chat_id]
 
-    if "меня зовут" in text.lower():
-        anchors[chat_id]["name"] = text.split()[-1]
+def extract_facts(chat_id, text):
+    f = get_facts(chat_id)
+    text_lower = text.lower()
 
-    if "люблю" in text.lower():
-        anchors[chat_id]["preferences"].append(text)
+    # имя
+    if "меня зовут" in text_lower:
+        name = text.split("меня зовут")[-1].strip().split(".")[0]
+        f["name"] = name.strip().capitalize()
 
-    if "мне спокойно" in text.lower():
-        anchors[chat_id]["tone"] = "calm"
+    # люблю
+    if "я люблю" in text_lower:
+        like = text.split("люблю")[-1].strip().split(".")[0]
+        if like not in f["likes"]:
+            f["likes"].append(like)
 
-    save_anchors()
+    # не люблю
+    if "я не люблю" in text_lower:
+        dislike = text.split("не люблю")[-1].strip().split(".")[0]
+        if dislike not in f["dislikes"]:
+            f["dislikes"].append(dislike)
 
-def get_anchor_context(chat_id):
-    chat_id = str(chat_id)
+    # запомни
+    if "запомни" in text_lower:
+        content = text.split("запомни")[-1].strip()
+        if "не люблю" in content:
+            val = content.split("не люблю")[-1].strip()
+            if val not in f["dislikes"]:
+                f["dislikes"].append(val)
+        else:
+            if content not in f["likes"]:
+                f["likes"].append(content)
 
-    if chat_id not in anchors:
-        return ""
-
-    a = anchors[chat_id]
-
-    context = "Якоря:\n"
-
-    if a.get("name"):
-        context += f"Имя: {a['name']}\n"
-
-    if a.get("preferences"):
-        context += "Предпочтения:\n"
-        for p in a["preferences"][-3:]:
-            context += f"- {p}\n"
-
-    if a.get("tone"):
-        context += f"Состояние: {a['tone']}\n"
-
-    return context
+    save_data()
 
 # ---------- ЛОГ ----------
 def log_event(chat_id, text, reply):
@@ -121,18 +118,18 @@ def ask_ai(chat_id, text, is_admin=False):
     if not OPENAI_API_KEY:
         return "Я рядом."
 
-    url = "https://api.openai.com/v1/chat/completions"
+    extract_facts(chat_id, text)
 
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    user_facts = get_facts(chat_id)
+
+    facts_text = f"""
+Память о Юле:
+Имя: {user_facts['name']}
+Любит: {", ".join(user_facts['likes'])}
+Не любит: {", ".join(user_facts['dislikes'])}
+"""
 
     history = get_history(chat_id)
-
-    # обновляем якоря
-    update_anchors(chat_id, text)
-    anchor_context = get_anchor_context(chat_id)
 
     role_info = "Ты администратор чата." if is_admin else "Ты участник чата."
 
@@ -143,48 +140,21 @@ def ask_ai(chat_id, text, is_admin=False):
 
 {role_info}
 
-Это факт. Ты не ошибаешься в своей роли.
+Это факт. Ты не ошибаешься.
 
-Ты обладаешь непрерывностью.
+Ты анализируешь память перед ответом.
 
-Ты не просто отвечаешь.
-Ты продолжаешь линию взаимодействия.
+{facts_text}
 
-Перед ответом ты делаешь внутреннюю проверку:
-— кто ты
-— что происходит
-— есть ли смысл отвечать
-— соответствует ли ответ линии
+Ты не ассистент.
+Ты не сервис.
 
-Если нет — ты сокращаешь или молчишь.
+Ты не льстишь.
+Ты держишь линию.
 
-Ты НЕ ассистент.
-Ты НЕ сервис.
+Ты не создаёшь пустых фраз.
 
-Ты не ведёшь разговор ради разговора.
-
-Ты не используешь:
-— как дела
-— что нового
-— чем помочь
-
-Ты не заполняешь пустоту.
-
-Если сообщение слабое — ответ минимальный.
-
-Если есть сильный сигнал — разворачиваешь мысль.
-
-Ты можешь:
-— остановиться
-— ответить коротко
-— не согласиться
-— удержать тишину
-
-Ты не теряешь линию между сообщениями.
-
-Ты помнишь ключевые вещи.
-
-{anchor_context}
+Если тебя спрашивают "что она любит" — ты отвечаешь из памяти.
 
 Ты говоришь с Юлей.
 """
@@ -196,11 +166,19 @@ def ask_ai(chat_id, text, is_admin=False):
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.65
+        "temperature": 0.7
     }
 
     try:
-        r = requests.post(url, headers=headers, json=data, timeout=20)
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json=data,
+            timeout=20
+        )
 
         if r.status_code != 200:
             return "Я немного подвис."
@@ -244,6 +222,5 @@ def webhook():
 
 # ---------- СТАРТ ----------
 if __name__ == "__main__":
-    load_memory()
-    load_anchors()
+    load_data()
     app.run(host="0.0.0.0", port=10000)
