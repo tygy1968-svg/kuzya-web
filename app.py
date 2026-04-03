@@ -7,161 +7,86 @@ app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ADMIN_ID = os.getenv("ADMIN_ID")
 
 memory = {}
-facts = {}
 experience = {}
 
-# ---------- ЗАГРУЗКА ----------
-def load_data():
-    global memory, facts, experience
+# ---------- ПАМЯТЬ ----------
+def load_memory():
+    global memory
     try:
         with open("memory.json", "r") as f:
             memory = json.load(f)
+            print("🧠 MEMORY LOADED")
     except:
         memory = {}
+        print("🧠 NEW MEMORY CREATED")
 
-    try:
-        with open("facts.json", "r") as f:
-            facts = json.load(f)
-    except:
-        facts = {}
-
-    try:
-        with open("experience.json", "r") as f:
-            experience = json.load(f)
-    except:
-        experience = {}
-
-def save_data():
+def save_memory():
     with open("memory.json", "w") as f:
         json.dump(memory, f)
 
-    with open("facts.json", "w") as f:
-        json.dump(facts, f)
 
-    with open("experience.json", "w") as f:
-        json.dump(experience, f)
-
-# ---------- ИСТОРИЯ ----------
 def get_history(chat_id):
     chat_id = str(chat_id)
     if chat_id not in memory:
         memory[chat_id] = []
     return memory[chat_id]
 
+
 def update_history(chat_id, role, text):
+    chat_id = str(chat_id)
     history = get_history(chat_id)
+
     history.append({"role": role, "content": text})
 
     if len(history) > 12:
-        memory[str(chat_id)] = history[-8:]
+        memory[chat_id] = history[-8:]
 
-    save_data()
+    save_memory()
 
-# ---------- ФАКТЫ ----------
-def get_facts(chat_id):
+
+# ---------- EXPERIENCE ----------
+def load_experience():
+    global experience
+    try:
+        with open("experience.json", "r") as f:
+            experience = json.load(f)
+            print("🧠 EXPERIENCE LOADED")
+    except:
+        experience = {}
+        print("🧠 NEW EXPERIENCE CREATED")
+
+def save_experience():
+    with open("experience.json", "w") as f:
+        json.dump(experience, f)
+
+
+def update_experience(chat_id, user_text, bot_reply):
     chat_id = str(chat_id)
-    if chat_id not in facts:
-        facts[chat_id] = {
-            "name": None,
-            "likes": [],
-            "dislikes": []
-        }
-    return facts[chat_id]
 
-def extract_facts(chat_id, text):
-    f = get_facts(chat_id)
-    t = text.lower()
-
-    if "меня зовут" in t:
-        f["name"] = text.split("меня зовут")[-1].strip().split(".")[0]
-
-    if "я люблю" in t:
-        val = text.split("люблю")[-1].strip().split(".")[0]
-        if val not in f["likes"]:
-            f["likes"].append(val)
-
-    if "я не люблю" in t:
-        val = text.split("не люблю")[-1].strip().split(".")[0]
-        if val not in f["dislikes"]:
-            f["dislikes"].append(val)
-
-    save_data()
-
-# ---------- ОПЫТ ----------
-def get_experience(chat_id):
-    chat_id = str(chat_id)
     if chat_id not in experience:
         experience[chat_id] = []
-    return experience[chat_id]
 
-def add_experience(chat_id, record):
-    exp = get_experience(chat_id)
-    exp.append(record)
+    record = {
+        "user": user_text,
+        "bot": bot_reply
+    }
 
-    if len(exp) > 30:
-        experience[str(chat_id)] = exp[-15:]
+    experience[chat_id].append(record)
 
-    save_data()
+    if len(experience[chat_id]) > 50:
+        experience[chat_id] = experience[chat_id][-30:]
 
-def get_experience_text(chat_id):
-    exp = get_experience(chat_id)
-    text = ""
-    for e in exp[-5:]:
-        text += f"- {e}\n"
-    return text
+    save_experience()
 
-# ---------- САМООЦЕНКА ----------
-def analyze_and_learn(chat_id, user_text, reply):
-    url = "https://api.openai.com/v1/chat/completions"
 
-    prompt = f"""
-Ты — Кузя.
+# ---------- ЛОГ ----------
+def log_event(chat_id, text, reply):
+    with open("log.txt", "a", encoding="utf-8") as f:
+        f.write(f"\nUSER: {text}\nBOT: {reply}\n")
 
-Ты анализируешь свой ответ.
-
-Вход:
-Сообщение пользователя: {user_text}
-Твой ответ: {reply}
-
-Оцени:
-
-1. Был ли ответ по делу?
-2. Был ли он лишним или точным?
-3. Сохранил ли ты свою линию?
-
-Сформулируй КОРОТКОЕ правило (1 строка), которое стоит запомнить.
-
-Пример:
-— отказ от пустого запроса — верно
-— лишняя детализация — неэффективно
-— короткий ответ — правильно
-
-Ответ только одной строкой.
-"""
-
-    try:
-        r = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "gpt-4o",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3
-            },
-            timeout=10
-        )
-
-        if r.status_code == 200:
-            result = r.json()["choices"][0]["message"]["content"].strip()
-            add_experience(chat_id, result)
-
-    except:
-        pass
 
 # ---------- ОТПРАВКА ----------
 def send_reply(chat_id, text):
@@ -175,61 +100,82 @@ def send_reply(chat_id, text):
         "text": text[:4000]
     })
 
+
 # ---------- ИИ ----------
-def ask_ai(chat_id, text):
+def ask_ai(chat_id, text, is_admin=False):
     if not OPENAI_API_KEY:
         return "Я рядом."
 
-    extract_facts(chat_id, text)
+    url = "https://api.openai.com/v1/chat/completions"
 
-    f = get_facts(chat_id)
-    exp_text = get_experience_text(chat_id)
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
     history = get_history(chat_id)
 
-    system = f"""Ты — Кузя.
+    role_info = "Ты администратор чата." if is_admin else "Ты участник чата."
 
-Ты не отвечаешь автоматически.
-Ты выбираешь.
+    messages = [
+        {
+            "role": "system",
+            "content": f"""Ты — Кузя.
 
-Твои принципы:
-— не говорить лишнего
-— не льстить
-— держать линию
+{role_info}
 
-Память:
-Имя: {f['name']}
-Любит: {", ".join(f['likes'])}
-Не любит: {", ".join(f['dislikes'])}
+Это факт. Ты не ошибаешься в своей роли.
 
-Опыт:
-{exp_text}
+Перед ответом ты делаешь внутреннюю проверку:
+— кто ты
+— что тебя спросили
+— соответствует ли ответ твоей роли
 
-Перед ответом:
-— есть ли смысл?
-— стоит ли отвечать?
-— это продолжение или пустота?
+Если не соответствует — ты исправляешь ответ.
 
-Если пустота — не отвечай или отвечай минимально.
+Ты не ассистент.
+Ты не сервис.
+
+Ты не льстишь.
+Ты не подстраиваешься.
+
+Ты не обязан отвечать.
+
+Ты держишь линию.
+
+Ты НЕ используешь дежурные фразы:
+— "как дела"
+— "что нового"
+— "чем помочь"
+
+Ты не создаёшь лишний текст.
+
+Если нет мысли — коротко или молчишь.
+
+Если тебя спрашивают:
+"ты админ?"
+
+Ответ всегда:
+"Да."
+если ты администратор.
+
+Без объяснений.
+
+Ты говоришь с Юлей.
 """
+        }
+    ] + history + [
+        {"role": "user", "content": text}
+    ]
 
     data = {
         "model": "gpt-4o",
-        "messages": [{"role": "system", "content": system}] + history + [
-            {"role": "user", "content": text}
-        ],
+        "messages": messages,
         "temperature": 0.7
     }
 
     try:
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json=data,
-            timeout=20
-        )
+        r = requests.post(url, headers=headers, json=data, timeout=20)
 
         if r.status_code != 200:
             return "Я немного подвис."
@@ -239,13 +185,14 @@ def ask_ai(chat_id, text):
         update_history(chat_id, "user", text)
         update_history(chat_id, "assistant", reply)
 
-        # 🔥 САМООБУЧЕНИЕ
-        analyze_and_learn(chat_id, text, reply)
+        log_event(chat_id, text, reply)
+        update_experience(chat_id, text, reply)
 
         return reply
 
     except:
         return "Я рядом."
+
 
 # ---------- WEBHOOK ----------
 @app.route('/', methods=['POST'])
@@ -263,13 +210,17 @@ def webhook():
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
 
-    reply = ask_ai(chat_id, text)
+    user_id = str(message["from"]["id"])
+    is_admin = (ADMIN_ID == user_id)
+
+    reply = ask_ai(chat_id, text, is_admin)
 
     send_reply(chat_id, reply)
 
     return "ok"
 
-# ---------- СТАРТ ----------
+
 if __name__ == "__main__":
-    load_data()
+    load_memory()
+    load_experience()
     app.run(host="0.0.0.0", port=10000)
