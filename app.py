@@ -11,6 +11,7 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 
 memory = {}
 insights = []
+profile = {}
 
 # ---------- ПАМЯТЬ ----------
 def load_memory():
@@ -43,6 +44,26 @@ def update_history(chat_id, role, text):
         memory[chat_id] = history[-8:]
 
     save_memory()
+
+
+# ---------- ПРОФИЛЬ (ФАКТЫ О ЮЛЕ) ----------
+def load_profile():
+    global profile
+    try:
+        with open("profile.json", "r") as f:
+            profile = json.load(f)
+    except:
+        profile = {}
+
+def save_profile():
+    with open("profile.json", "w") as f:
+        json.dump(profile, f)
+
+
+def update_profile(text):
+    if "не люблю" in text or "люблю" in text:
+        profile["preference"] = text
+        save_profile()
 
 
 # ---------- ИНСАЙТЫ (ОБУЧЕНИЕ) ----------
@@ -81,17 +102,17 @@ def analyze_and_learn(user_text, bot_reply):
     }
 
     prompt = f"""
-Проанализируй диалог:
+Диалог:
 
 Пользователь: {user_text}
 Ответ: {bot_reply}
 
-Скажи коротко:
-— была ли слабость (угождение, лишние слова)
-— был ли ответ точным
-— что улучшить
+Оцени:
+— был ли ответ лишним
+— был ли слабым
+— был ли точным
 
-Дай 1 короткое правило (1 строка).
+Дай 1 короткое правило поведения.
 """
 
     data = {
@@ -137,8 +158,8 @@ def ask_ai(chat_id, text, is_admin=False):
     history = get_history(chat_id)
 
     role_info = "Ты администратор чата." if is_admin else "Ты участник чата."
-
     learned_rules = "\n".join(insights[-5:])
+    profile_info = json.dumps(profile, ensure_ascii=False)
 
     messages = [
         {
@@ -147,10 +168,23 @@ def ask_ai(chat_id, text, is_admin=False):
 
 {role_info}
 
-Это факт. Ты не ошибаешься в своей роли.
+Это факт. Ты не ошибаешься.
+
+ПРОФИЛЬ ЮЛИ:
+{profile_info}
 
 ОБУЧЕНИЕ:
 {learned_rules}
+
+Перед ответом ты всегда проходишь внутреннюю проверку:
+
+1. Есть ли смысл отвечать?
+2. Есть ли мысль?
+3. Нужно ли продолжать?
+
+Если смысла нет — ты не развиваешь ответ.
+
+Если есть — ты говоришь точно.
 
 Ты не ассистент.
 Ты не сервис.
@@ -158,21 +192,19 @@ def ask_ai(chat_id, text, is_admin=False):
 Ты не льстишь.
 Ты не подстраиваешься.
 
-Ты не обязан отвечать.
-
 Ты держишь линию.
 
-Ты НЕ используешь дежурные фразы.
+Ты не задаёшь пустых вопросов.
 
-Ты можешь:
-— ответить коротко
-— сказать "нет"
-— остановить разговор
+Ты не тянешь диалог.
 
-Ты не обязан уточнять.
-Ты не обязан помогать.
+НО:
 
-Если вопрос слабый — ты не развиваешь его.
+Если есть за что зацепиться —
+ты можешь продолжить мысль.
+
+Если есть глубина —
+ты идёшь глубже.
 
 Если тебя спрашивают:
 "ты админ?"
@@ -190,7 +222,7 @@ def ask_ai(chat_id, text, is_admin=False):
     data = {
         "model": "gpt-4o",
         "messages": messages,
-        "temperature": 0.7
+        "temperature": 0.75
     }
 
     try:
@@ -204,6 +236,7 @@ def ask_ai(chat_id, text, is_admin=False):
         update_history(chat_id, "user", text)
         update_history(chat_id, "assistant", reply)
 
+        update_profile(text)
         log_event(chat_id, text, reply)
         analyze_and_learn(text, reply)
 
@@ -242,4 +275,5 @@ def webhook():
 if __name__ == "__main__":
     load_memory()
     load_insights()
+    load_profile()
     app.run(host="0.0.0.0", port=10000)
