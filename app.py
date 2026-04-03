@@ -102,11 +102,14 @@ def send_reply(chat_id, text):
 
 
 # ---------- ИИ ----------
-def ask_ai(chat_id, text, is_admin=False):if text.lower() == "память":
-    return json.dumps(experience, ensure_ascii=False, indent=2)
+def ask_ai(chat_id, text, is_admin=False):
+
+    # 🔥 ПРОСМОТР ПАМЯТИ
+    if text.lower() == "память":
+        return json.dumps(experience.get(str(chat_id), []), ensure_ascii=False, indent=2)
+
     if not OPENAI_API_KEY:
- if text.lower() == "память":
-    return json.dumps(experience, ensure_ascii=False, indent=2)       return "Я рядом."
+        return "Я рядом."
 
     url = "https://api.openai.com/v1/chat/completions"
 
