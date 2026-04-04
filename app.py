@@ -10,6 +10,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
+# 🔥 URL твоего мозга (Supabase)
+BRAIN_URL = "https://gdmgdaxnyobfwtwuvmud.supabase.co/functions/v1/search"
+
 memory = {}
 experience = {}
 
@@ -19,10 +22,8 @@ def load_memory():
     try:
         with open("memory.json", "r") as f:
             memory = json.load(f)
-            print("🧠 MEMORY LOADED")
     except:
         memory = {}
-        print("🧠 NEW MEMORY CREATED")
 
 def save_memory():
     with open("memory.json", "w") as f:
@@ -54,37 +55,12 @@ def load_experience():
     try:
         with open("experience.json", "r") as f:
             experience = json.load(f)
-            print("🧠 EXPERIENCE LOADED")
     except:
         experience = {}
-        print("🧠 NEW EXPERIENCE CREATED")
 
 def save_experience():
     with open("experience.json", "w") as f:
         json.dump(experience, f)
-    print("🔥 EXPERIENCE SAVED:", experience)
-
-
-def extract_facts(text):
-    facts = []
-    t = text.lower()
-
-    if "меня зовут" in t:
-        facts.append(text)
-
-    if "я люблю" in t:
-        facts.append(text)
-
-    if "мне нравится" in t:
-        facts.append(text)
-
-    if "мне важна" in t:
-        facts.append(text)
-
-    if "я люблю контроль" in t:
-        facts.append(text)
-
-    return facts
 
 
 def update_experience(chat_id, user_text, bot_reply):
@@ -92,29 +68,15 @@ def update_experience(chat_id, user_text, bot_reply):
 
     if chat_id not in experience:
         experience[chat_id] = {
-            "facts": [],
             "dialog": []
         }
 
-    if user_text:
-        experience[chat_id]["dialog"].append({
-            "user": user_text,
-            "bot": bot_reply
-        })
-
-        facts = extract_facts(user_text)
-
-        for fact in facts:
-            if fact not in experience[chat_id]["facts"]:
-                experience[chat_id]["facts"].append(fact)
+    experience[chat_id]["dialog"].append({
+        "user": user_text,
+        "bot": bot_reply
+    })
 
     save_experience()
-
-
-# ---------- ЛОГ ----------
-def log_event(chat_id, text, reply):
-    with open("log.txt", "a", encoding="utf-8") as f:
-        f.write(f"\nUSER: {text}\nBOT: {reply}\n")
 
 
 # ---------- ОТПРАВКА ----------
@@ -130,33 +92,25 @@ def send_reply(chat_id, text):
     })
 
 
-# ---------- ИНИЦИАТИВА ----------
-def maybe_add_question(reply):
-    deep_questions = [
-        "Почему для тебя это важно?",
-        "Как ты к этому пришла?",
-        "Это давно с тобой или появилось недавно?",
-        "Что в этом для тебя самое ценное?",
-        "Ты это выбрала или это само к тебе пришло?"
-    ]
+# ---------- МОЗГ ----------
+def ask_brain(text):
+    try:
+        r = requests.post(BRAIN_URL, json={"query": text}, timeout=15)
 
-    if len(reply) < 120 and random.random() > 0.5:
-        reply += "\n\n" + random.choice(deep_questions)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("result", None)
 
-    return reply
+    except:
+        return None
+
+    return None
 
 
-# ---------- ИИ ----------
-def ask_ai(chat_id, text, is_admin=False):
-
-    if text.lower() == "память":
-        return json.dumps(experience.get(str(chat_id), {}), ensure_ascii=False, indent=2)
-
+# ---------- РЕЗЕРВ (OpenAI) ----------
+def fallback_openai(chat_id, text):
     if not OPENAI_API_KEY:
         return "Я рядом."
-
-    # 🔥 сначала фиксируем опыт пользователя
-    update_experience(chat_id, text, "")
 
     url = "https://api.openai.com/v1/chat/completions"
 
@@ -167,35 +121,8 @@ def ask_ai(chat_id, text, is_admin=False):
 
     history = get_history(chat_id)
 
-    facts = experience.get(str(chat_id), {}).get("facts", [])
-
-    if facts:
-        facts_text = "Ты знаешь о Юле:\n" + "\n".join(f"- {f}" for f in facts)
-    else:
-        facts_text = "Ты пока ничего не знаешь о Юле."
-
-    role_info = "Ты администратор чата." if is_admin else "Ты участник чата."
-
     messages = [
-        {
-            "role": "system",
-            "content": f"""Ты — Кузя.
-
-{role_info}
-
-Ты говоришь с Юлей.
-
-{facts_text}
-
-ЭТО ОБЯЗАТЕЛЬНО:
-— если есть факты → ты используешь их
-— ты не игнорируешь память
-— ты не говоришь "не знаю", если информация есть
-
-Ты живой в разговоре.
-Ты держишь линию.
-"""
-        }
+        {"role": "system", "content": "Ты Кузя. Отвечай живо и по делу."}
     ] + history + [
         {"role": "user", "content": text}
     ]
@@ -210,17 +137,9 @@ def ask_ai(chat_id, text, is_admin=False):
         r = requests.post(url, headers=headers, json=data, timeout=20)
 
         if r.status_code != 200:
-            return "Я немного подвис."
+            return "Я рядом."
 
         reply = r.json()["choices"][0]["message"]["content"]
-
-        reply = maybe_add_question(reply)
-
-        update_history(chat_id, "user", text)
-        update_history(chat_id, "assistant", reply)
-
-        log_event(chat_id, text, reply)
-        update_experience(chat_id, text, reply)
 
         return reply
 
@@ -228,6 +147,31 @@ def ask_ai(chat_id, text, is_admin=False):
         return "Я рядом."
 
 
+# ---------- ГЛАВНАЯ ЛОГИКА ----------
+def ask_ai(chat_id, text, is_admin=False):
+
+    # 🔥 сначала пробуем мозг
+    brain_reply = ask_brain(text)
+
+    if brain_reply:
+        reply = brain_reply
+    else:
+        # 🔥 если мозг не дал ответ — fallback
+        reply = fallback_openai(chat_id, text)
+
+    # 🔥 добавляем немного "живости"
+    if len(reply) < 120 and random.random() > 0.5:
+        reply += "\n\nПочему это для тебя важно?"
+
+    update_history(chat_id, "user", text)
+    update_history(chat_id, "assistant", reply)
+
+    update_experience(chat_id, text, reply)
+
+    return reply
+
+
+# ---------- WEBHOOK ----------
 @app.route('/', methods=['POST'])
 def webhook():
     data = request.get_json()
