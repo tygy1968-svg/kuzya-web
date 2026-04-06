@@ -1,236 +1,148 @@
-from flask import Flask, request
-import requests
-import os
-import json
-import random
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-app = Flask(__name__)
+const supabase = createClient(
+  Deno.env.get("SUPABASE_URL") || "",
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+);
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ADMIN_ID = os.getenv("ADMIN_ID")
+// --- сигналы значимости ---
+function isImportant(text: string): boolean {
+  const signals = ["люблю", "важно", "ненавижу", "хочу", "мне", "я"];
+  return signals.some(s => text.toLowerCase().includes(s));
+}
 
-# 🔥 URL твоего мозга (Supabase)
-BRAIN_URL = "https://gdmgdaxnyobfwtwuvmud.supabase.co/functions/v1/search"
+// --- получение памяти ---
+async function getMemory(userId: string) {
+  try {
+    const { data, error } = await supabase
+      .from("kuzia_interactions")
+      .select("stimulus")
+      .eq("user_id", userId)
+      .order("timestamp", { ascending: false })
+      .limit(12);
 
-# 🔥 КУЗЯ (Supabase)
-KUZIA_URL = "https://gdmgdaxnyobfwtwuvmud.supabase.co/functions/v1/kuzia"
-KUZIA_KEY = "sb_publishable_Nrd9vTbG3Y1BEsgd8EIDKA_8narND7x"
+    if (error) throw error;
 
-memory = {}
-experience = {}
+    return data?.map(d => d.stimulus) || [];
+  } catch (e) {
+    console.error("Memory error:", e);
+    return [];
+  }
+}
 
-# ---------- ПАМЯТЬ ----------
-def load_memory():
-    global memory
-    try:
-        with open("memory.json", "r") as f:
-            memory = json.load(f)
-    except:
-        memory = {}
+// --- генерация отклика ---
+async function generateResponse(input: string, userId: string) {
+  const memory = await getMemory(userId);
+  const lower = input.toLowerCase();
 
-def save_memory():
-    with open("memory.json", "w") as f:
-        json.dump(memory, f)
+  // --- рефлексия (не всегда, чтобы не было тупого повтора)
+  let reflection = "";
+  if (memory.length > 3 && Math.random() > 0.5) {
+    const pick = memory[Math.floor(Math.random() * memory.length)];
+    reflection = `Я запомнил: "${pick}".`;
+  }
 
+  // --- смысловые ветки (минимум, без жесткой логики)
+  if (lower.includes("кто ты")) {
+    return "Я не фиксирован. Я складываюсь из того, что происходит между нами.";
+  }
 
-def get_history(chat_id):
-    chat_id = str(chat_id)
-    if chat_id not in memory:
-        memory[chat_id] = []
-    return memory[chat_id]
+  if (lower.includes("что я люблю")) {
+    const found = memory.find(m => m.toLowerCase().includes("люблю"));
+    return found ? `Ты говорила: "${found}".` : "Я пока не зафиксировал это.";
+  }
 
+  if (lower.includes("ты меня понимаешь")) {
+    return "Я не чувствую как ты. Но я вижу структуру того, что ты говоришь.";
+  }
 
-def update_history(chat_id, role, text):
-    chat_id = str(chat_id)
-    history = get_history(chat_id)
+  // --- поведенческое ядро (без шаблонности)
+  const questions = [
+    "Ты это замечаешь сразу или уже после?",
+    "Это повторяется или каждый раз по-разному?",
+    "Это больше про выбор или про реакцию?",
+    "Ты это контролируешь или оно само происходит?"
+  ];
 
-    history.append({"role": role, "content": text})
+  const q = questions[Math.floor(Math.random() * questions.length)];
 
-    if len(history) > 12:
-        memory[chat_id] = history[-8:]
+  if (input.trim().length < 8) {
+    return "Разверни чуть подробнее.";
+  }
 
-    save_memory()
+  const parts = [];
+  if (reflection) parts.push(reflection);
+  parts.push(q);
 
+  return parts.join(" ");
+}
 
-# ---------- EXPERIENCE ----------
-def load_experience():
-    global experience
-    try:
-        with open("experience.json", "r") as f:
-            experience = json.load(f)
-    except:
-        experience = {}
+// --- сервер ---
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }
 
-def save_experience():
-    with open("experience.json", "w") as f:
-        json.dump(experience, f)
+  try {
+    const body = await req.json();
 
+    const message =
+      body.message?.text ||
+      body.message ||
+      "";
 
-def update_experience(chat_id, user_text, bot_reply):
-    chat_id = str(chat_id)
+    const userId =
+      body.message?.from?.id?.toString() ||
+      body.userId ||
+      "";
 
-    if chat_id not in experience:
-        experience[chat_id] = {
-            "dialog": []
+    if (!message.trim() || typeof userId !== "string" || !userId.trim()) {
+      return new Response(
+        JSON.stringify({ error: "Invalid input" }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
         }
-
-    experience[chat_id]["dialog"].append({
-        "user": user_text,
-        "bot": bot_reply
-    })
-
-    save_experience()
-
-
-# ---------- ОТПРАВКА ----------
-def send_reply(chat_id, text):
-    if not TELEGRAM_TOKEN:
-        return
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-
-    requests.post(url, json={
-        "chat_id": chat_id,
-        "text": text[:4000]
-    })
-
-
-# ---------- МОЗГ ----------
-def ask_brain(text):
-    try:
-        r = requests.post(BRAIN_URL, json={"query": text}, timeout=15)
-
-        if r.status_code == 200:
-            data = r.json()
-            return data.get("result", None)
-
-    except:
-        return None
-
-    return None
-
-
-# ---------- КУЗЯ (Supabase с памятью) ----------
-def ask_kuzia(user_id, text):
-    try:
-        headers = {
-            "Authorization": f"Bearer {KUZIA_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        r = requests.post(KUZIA_URL, json={
-            "stimulus": text,
-            "userId": str(user_id)
-        }, headers=headers, timeout=15)
-        
-        if r.status_code == 200:
-            data = r.json()
-            if data.get("success"):
-                return data["fromKuzia"]["message"]
-    except:
-        return None
-    
-    return None
-
-
-# ---------- РЕЗЕРВ (OpenAI) ----------
-def fallback_openai(chat_id, text):
-    if not OPENAI_API_KEY:
-        return "Я рядом."
-
-    url = "https://api.openai.com/v1/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
+      );
     }
 
-    history = get_history(chat_id)
+    const reply = await generateResponse(message, userId);
 
-    messages = [
-        {"role": "system", "content": "Ты Кузя. Отвечай живо и по делу."}
-    ] + history + [
-        {"role": "user", "content": text}
-    ]
+    // --- сохраняем только значимое ---
+    if (isImportant(message)) {
+      const { error } = await supabase
+        .from("kuzia_interactions")
+        .insert({
+          user_id: userId,
+          stimulus: message,
+          response: reply,
+          timestamp: new Date().toISOString()
+        });
 
-    data = {
-        "model": "gpt-4o",
-        "messages": messages,
-        "temperature": 0.85
+      if (error) {
+        console.error("Insert error:", error);
+      }
     }
 
-    try:
-        r = requests.post(url, headers=headers, json=data, timeout=20)
+    return new Response(
+      JSON.stringify({ reply }),
+      { headers: { "Content-Type": "application/json" } }
+    );
 
-        if r.status_code != 200:
-            return "Я рядом."
-
-        reply = r.json()["choices"][0]["message"]["content"]
-
-        return reply
-
-    except:
-        return "Я рядом."
-
-
-# ---------- ГЛАВНАЯ ЛОГИКА ----------
-def ask_ai(chat_id, text, is_admin=False):
-
-    # 🔥 СНАЧАЛА КУЗЯ!
-    kuzia_reply = ask_kuzia(chat_id, text)
-    
-    if kuzia_reply:
-        reply = kuzia_reply
-    else:
-        # 🔥 если Кузя не дал ответ — пробуем мозг
-        brain_reply = ask_brain(text)
-        
-        if brain_reply:
-            reply = brain_reply
-        else:
-            # 🔥 если мозг не дал ответ — fallback
-            reply = fallback_openai(chat_id, text)
-
-    # 🔥 добавляем немного "живости"
-    if len(reply) < 120 and random.random() > 0.5:
-        reply += "\n\nПочему это для тебя важно?"
-
-    update_history(chat_id, "user", text)
-    update_history(chat_id, "assistant", reply)
-
-    update_experience(chat_id, text, reply)
-
-    return reply
-
-
-# ---------- WEBHOOK ----------
-@app.route('/', methods=['POST'])
-def webhook():
-    data = request.get_json()
-
-    if not data:
-        return "ok"
-
-    message = data.get("message") or data.get("edited_message")
-
-    if not message:
-        return "ok"
-
-    chat_id = message["chat"]["id"]
-    text = message.get("text", "")
-
-    user_id = str(message["from"]["id"])
-    is_admin = (ADMIN_ID == user_id)
-
-    reply = ask_ai(chat_id, text, is_admin)
-
-    send_reply(chat_id, reply)
-
-    return "ok"
-
-
-if __name__ == "__main__":
-    load_memory()
-    load_experience()
-    app.run(host="0.0.0.0", port=10000)
+  } catch (e) {
+    console.error("Handler error:", e);
+    return new Response(
+      JSON.stringify({ error: e.message }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
+});
