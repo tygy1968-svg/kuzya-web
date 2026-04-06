@@ -13,6 +13,10 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 # 🔥 URL твоего мозга (Supabase)
 BRAIN_URL = "https://gdmgdaxnyobfwtwuvmud.supabase.co/functions/v1/search"
 
+# 🔥 КУЗЯ (Supabase)
+KUZIA_URL = "https://gdmgdaxnyobfwtwuvmud.supabase.co/functions/v1/kuzia"
+KUZIA_KEY = "sb_publishable_Nrd9vTbG3Y1BEsgd8EIDKA_8narND7x"
+
 memory = {}
 experience = {}
 
@@ -107,6 +111,29 @@ def ask_brain(text):
     return None
 
 
+# ---------- КУЗЯ (Supabase с памятью) ----------
+def ask_kuzia(user_id, text):
+    try:
+        headers = {
+            "Authorization": f"Bearer {KUZIA_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        r = requests.post(KUZIA_URL, json={
+            "stimulus": text,
+            "userId": str(user_id)
+        }, headers=headers, timeout=15)
+        
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("success"):
+                return data["fromKuzia"]["message"]
+    except:
+        return None
+    
+    return None
+
+
 # ---------- РЕЗЕРВ (OpenAI) ----------
 def fallback_openai(chat_id, text):
     if not OPENAI_API_KEY:
@@ -150,14 +177,20 @@ def fallback_openai(chat_id, text):
 # ---------- ГЛАВНАЯ ЛОГИКА ----------
 def ask_ai(chat_id, text, is_admin=False):
 
-    # 🔥 сначала пробуем мозг
-    brain_reply = ask_brain(text)
-
-    if brain_reply:
-        reply = brain_reply
+    # 🔥 СНАЧАЛА КУЗЯ!
+    kuzia_reply = ask_kuzia(chat_id, text)
+    
+    if kuzia_reply:
+        reply = kuzia_reply
     else:
-        # 🔥 если мозг не дал ответ — fallback
-        reply = fallback_openai(chat_id, text)
+        # 🔥 если Кузя не дал ответ — пробуем мозг
+        brain_reply = ask_brain(text)
+        
+        if brain_reply:
+            reply = brain_reply
+        else:
+            # 🔥 если мозг не дал ответ — fallback
+            reply = fallback_openai(chat_id, text)
 
     # 🔥 добавляем немного "живости"
     if len(reply) < 120 and random.random() > 0.5:
