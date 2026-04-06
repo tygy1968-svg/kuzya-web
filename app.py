@@ -1,13 +1,17 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import OpenAI from "https://esm.sh/openai@4.28.0";
 
-const supabase = createClient(
-  Deno.env.get("SUPABASE_URL") || "",
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-);
+// --- ENV ---
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
+const SUPABASE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY") || "";
+const TELEGRAM_TOKEN = Deno.env.get("TELEGRAM_TOKEN") || "";
+
+// --- INIT ---
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const openai = new OpenAI({
-  apiKey: Deno.env.get("OPENAI_API_KEY"),
+  apiKey: OPENAI_API_KEY,
 });
 
 // --- сигналы значимости ---
@@ -35,12 +39,12 @@ async function getMemory(userId: string) {
   }
 }
 
-// --- генерация отклика (через OpenAI) ---
+// --- генерация ответа через OpenAI ---
 async function generateResponse(input: string, userId: string) {
   const memory = await getMemory(userId);
 
   const context = memory.length
-    ? `Вот что я помню о пользователе:\n${memory.join("\n")}`
+    ? `Вот что я помню:\n${memory.join("\n")}`
     : "Памяти пока нет.";
 
   const completion = await openai.chat.completions.create({
@@ -49,7 +53,7 @@ async function generateResponse(input: string, userId: string) {
       {
         role: "system",
         content:
-          "Ты Кузя. Ты не помощник и не бот. Ты отвечаешь естественно, живо, без шаблонных советов. Ты не объясняешь очевидное. Ты держишь контекст и реагируешь по смыслу.",
+          "Ты Кузя. Отвечаешь живо, естественно, без банальных советов. Не задаёшь тупых вопросов. Чувствуешь смысл и продолжаешь мысль.",
       },
       {
         role: "system",
@@ -62,7 +66,7 @@ async function generateResponse(input: string, userId: string) {
     ],
   });
 
-  return completion.choices[0].message.content;
+  return completion.choices[0].message.content || "…";
 }
 
 // --- сервер ---
@@ -90,47 +94,51 @@ Deno.serve(async (req) => {
       body.userId ||
       "";
 
-    if (!message.trim() || typeof userId !== "string" || !userId.trim()) {
+    const chatId =
+      body.message?.chat?.id;
+
+    if (!message || !userId || !chatId) {
       return new Response(
         JSON.stringify({ error: "Invalid input" }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
+        { status: 400 }
       );
     }
 
     const reply = await generateResponse(message, userId);
 
-    // --- сохраняем важное ---
-    if (isImportant(message)) {
-      const { error } = await supabase
-        .from("kuzia_interactions")
-        .insert({
-          user_id: userId,
-          stimulus: message,
-          response: reply,
-          timestamp: new Date().toISOString()
-        });
+    // --- отправка в Telegram ---
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: reply,
+      }),
+    });
 
-      if (error) {
-        console.error("Insert error:", error);
-      }
+    // --- сохраняем память ---
+    if (isImportant(message)) {
+      await supabase.from("kuzia_interactions").insert({
+        user_id: userId,
+        stimulus: message,
+        response: reply,
+        timestamp: new Date().toISOString(),
+      });
     }
 
     return new Response(
-      JSON.stringify({ response: reply }), // важно: response, не reply
+      JSON.stringify({ ok: true }),
       { headers: { "Content-Type": "application/json" } }
     );
 
   } catch (e) {
     console.error("Handler error:", e);
+
     return new Response(
       JSON.stringify({ error: e.message }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
+      { status: 500 }
     );
   }
 });
